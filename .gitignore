@@ -1,0 +1,4 @@
+*pycache*
+.ipynb_checkpoints*
+*.h5
+*.mp4
