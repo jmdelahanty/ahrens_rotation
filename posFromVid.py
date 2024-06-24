@@ -1,8 +1,6 @@
 import cv2 as cv
 from utils import *
 import matplotlib.pyplot as plt
-from tkinter import Tk
-from tkinter.filedialog import askopenfilename
 
 filePath='~/Desktop/'
 vidFileName='fullExp.avi'
