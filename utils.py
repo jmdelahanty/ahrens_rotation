@@ -20,6 +20,7 @@ def selRoi(frame):
             break
     cv2.destroyAllWindows()
     x,y,w,h = int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3])
+    print(roi)
     return x,y,w,h
 def cropImage(x,y,w,h,frame):
     # right wall
