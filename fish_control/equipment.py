@@ -17,9 +17,17 @@ class Incubator:
                     "is_stable": True,
                     "dawn_dusk": "25 minutes"
                 },
-                "room": "2E.261"
+                "room": "2E.260"
             }
         }
 
-    def get_properties(self):
-        return self.incubator_properties
+    # def get_properties(self):
+    #     return self.incubator_properties
+    def to_dict(self, selection: str):
+        if selection == "Left Lab Incubator":
+            return self.incubator_properties.get("Left Lab Incubator", {})
+        elif selection == "Right Lab Incubator":
+            return self.incubator_properties.get("Right Lab Incubator", {})
+        else:
+            raise ValueError("Invalid selection. Choose 'left' or 'right'.")
+        
