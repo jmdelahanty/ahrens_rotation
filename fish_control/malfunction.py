@@ -37,6 +37,7 @@ from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt, QDate, pyqtSlot
 import experiment as experiment_module
 from threading import Event
+import threading
 
 # Pydantic models (from fish_updater.py)
 class LightCycle(BaseModel):
@@ -516,29 +517,28 @@ class CameraThread(QThread):
 
     def __init__(self, duration, frame_rate, start_event, camera_ready_event, video_file):
         super().__init__()
-        self.duration = duration + 0.5  # Add 0.5s to ensure the last frame is captured
         self.frame_rate = frame_rate
+        self.duration = duration + (2/ self.frame_rate)
         self.start_event = start_event
         self.camera_ready_event = camera_ready_event
         self.video_file = video_file
         self.expected_frame_count = int(self.frame_rate * self.duration)
         self.frame_count = 0
-        self.stop_flag = False
-
+        self.stop_flag = threading.Event()
 
     def run(self):
         self.log_signal.emit("CameraThread: Initializing camera")
 
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
-            self.log_signal.emit("ERROR: Cannot open webcam")
+            self.log_signal.emit("ERROR: Cannot open Camera")
             return
 
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.log_signal.emit(f"Frame size: {frame_width}x{frame_height}")
 
-        fourcc = cv2.VideoWriter_fourcc(*'X264')
+        fourcc = cv2.VideoWriter_fourcc(*'AVC1')
         out = cv2.VideoWriter(self.video_file, fourcc, self.frame_rate, (frame_width, frame_height))
         
         self.log_signal.emit(f"Checking if video file is opened: {out.isOpened()}")
@@ -548,10 +548,9 @@ class CameraThread(QThread):
             return
         self.log_signal.emit("Video file opened for writing")
         self.log_signal.emit(f"Video will be saved as: {os.path.abspath(self.video_file)}")
-        frame_count = 0
 
-        expected_frame_count = int(self.frame_rate * self.duration)
-        self.log_signal.emit(f"Expected frame count: {expected_frame_count}")
+        expected_frame_count = int(self.frame_rate * self.duration) + 1
+        self.log_signal.emit(f"Expected frame count: {self.expected_frame_count}")
 
         self.log_signal.emit("Camera is ready, setting ready event")
         self.camera_ready_event.set()
@@ -560,122 +559,147 @@ class CameraThread(QThread):
         self.start_event.wait()
         self.log_signal.emit("CameraThread: Starting video capture")
         start_capture_time = time.perf_counter()
+        next_frame_time = start_capture_time
+        frame_interval = 1.0 / self.frame_rate
         self.log_signal.emit(f"CameraThread: Capture start time: {start_capture_time}")
+        
+        def timing_thread():
+            next_frame_time = start_capture_time
+            while not self.stop_flag and self.frame_count < self.expected_frame_count:
+                current_time = time.perf_counter()
+                if current_time >= next_frame_time:
+                    self.frame_count += 1
+                    next_frame_time += frame_interval
+                time.sleep(0.001)  # Small sleep to prevent busy-waiting
+        
+        timing_thread = threading.Thread(target=timing_thread)
+        timing_thread.start()
 
-        while frame_count < expected_frame_count and not self.stop_flag:
+        while self.frame_count < self.expected_frame_count and not self.stop_flag.is_set():
             ret, frame = cap.read()
             if ret:
-                frame_count += 1
-                resized_frame = cv2.resize(frame, (frame_width, frame_height))
-                current_frame_height, current_frame_width = frame.shape[:2]
-                if resized_frame.shape[:2] != (frame_height, frame_width):
-                    self.log_signal.emit(f"ERROR: Frame size mismatch: expected {frame_height}x{frame_width}, got {resized_frame.shape[:2]}")
-                    break
-
-                if resized_frame.shape[2] != 3:
-                    self.log_signal.emit(f"ERROR: Frame color channels mismatch: expected 3, got {resized_frame.shape[2]}")
-                    break
-
-                out.write(resized_frame)
+                self.frame_count += 1
+                out.write(frame)
                 rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_image.shape
                 bytes_per_line = ch * w
                 qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
                 self.frame_ready.emit(qt_image)
+                next_frame_time += start_capture_time + (self.frame_count / self.frame_rate)
+                if self.frame_count % self.frame_count == 0:
+                    elapsed_time = time.perf_counter() - start_capture_time
+                    self.log_signal.emit(f"Frames captured: {self.frame_count}, Time: {elapsed_time:.4f}s")
             else:
                 self.log_signal.emit("ERROR: Failed to capture frame")
                 break
+        else:
+            time.sleep(0.0005)
 
+        self.stop_flag.set()
+        timing_thread.join()
         cap.release()
         out.release()
         
-        self.log_signal.emit(f"Video recording completed. Total frames: {frame_count}")
-        self.log_signal.emit(f"Total time elapsed: {time.perf_counter() - start_capture_time:.2f}s")
-        # Indicate whether the total frames equals expected frames
-        if frame_count == expected_frame_count:
-            self.log_signal.emit("Video recording completed as expected")
+        end_capture_time = time.perf_counter()
+        total_duration = end_capture_time - start_capture_time
+
+        self.log_signal.emit(f"Video recording completed. Total frames: {self.frame_count}")
+        self.log_signal.emit(f"Total time elapsed: {total_duration:.2f}s")
+        # Verify the frame count in the saved video
+        saved_cap = cv2.VideoCapture(self.video_file)
+        saved_frame_count = int(saved_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        saved_cap.release()
+        self.log_signal.emit(f"Frames in saved video: {saved_frame_count}")
+
+        if self.frame_count == saved_frame_count == self.expected_frame_count:
+            self.log_signal.emit("Video recording completed as expected!")
         else:
             self.log_signal.emit("WARNING: Inconsistent frame count detected")
-            self.log_signal.emit(f"Expected frames: {expected_frame_count}, actual frames: {frame_count}")
-            # Get the framecount directly from the video that was made
-            cap = cv2.VideoCapture(self.video_file)
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            self.log_signal.emit(f"Actual frame count from video file: {frame_count}")
-            cap.release()
+            self.log_signal.emit(f"Expected: {self.expected_frame_count}, Captured: {self.frame_count}, Saved: {saved_frame_count}")
+
         self.log_signal.emit(f"Video saved to: {os.path.abspath(self.video_file)}")
 
     def stop(self):
-        self.stop_flag = True
+        self.log_signal.emit("Stopping camera thread...")
+        self.stop_flag.set()
+        self.log_signal.emit("Camera thread stopped!")
+
 
 class H5WriterThread(QThread):
     def __init__(self, filename='valve_timestamps.h5', start_event=None, h5_ready_event=None):
         super().__init__()
         self.filename = filename
         self.queue = queue.Queue()
-        self.stop_flag = False
-        self.processing_done = False
+        self.stop_flag = threading.Event()
+        self.processing_done = threading.Event()
         self.start_event = start_event
         self.h5_ready_event = h5_ready_event
-
+        self.experiment_start_time = None
+        self.event_count = 0
 
     def run(self):
-
         try:
             with h5py.File(self.filename, 'w') as f:
                 print(f"H5WriterThread: File {self.filename} created")
                 
-                dt = np.dtype([('event', 'S20'), ('timestamp', 'f8')])
+                dt = np.dtype([
+                    ('event', 'S20'),
+                    ('stim_number', 'i4'),
+                    ('pulse_number', 'i4'),
+                    ('timestamp', 'f8')
+                ])
                 dset = f.create_dataset('valve_events', (0,), maxshape=(None,), dtype=dt, chunks=True)
                 f.attrs['intended_fps'] = 30
 
-                # Set the ready event to indicate that the HDF5 file is ready
                 self.h5_ready_event.set()
-
-                buffer = []
-                buffer_size = 10
-
-                print("H5WriterThread: Waiting for start event...")
+                print("H5WriterThread: Ready event set, waiting for start event...")
                 self.start_event.wait()
-                print("H5WriterThread: Start barrier passed, beginning to write data")
+                
+                self.experiment_start_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+                f.attrs['experiment_start_time'] = self.experiment_start_time
+                print(f"H5WriterThread: Experiment started at {self.experiment_start_time}")
 
-                while not self.stop_flag or not self.queue.empty():
+                while not self.stop_flag.is_set() or not self.queue.empty():
                     try:
-                        event, timestamp = self.queue.get(timeout=1)
-                        buffer.append((event, timestamp))
-                        print(f"H5WriterThread: Event added to buffer: {event} at {timestamp}")
-
-                        if len(buffer) >= buffer_size:
-                            data = np.array(buffer, dtype=dt)
-                            dset.resize((dset.shape[0] + len(buffer),))
-                            dset[-len(buffer):] = data
-                            buffer.clear()
-                            f.flush()
+                        event_data = self.queue.get(timeout=1)
+                        self.event_count += 1
+                        print(f"H5WriterThread: Writing event to file: {event_data}")
+                        
+                        dset.resize((dset.shape[0] + 1,))
+                        dset[-1] = event_data
+                        f.flush()
+                        
+                        print(f"H5WriterThread: Event written. Total events: {dset.shape[0]}")
                     except queue.Empty:
+                        if self.stop_flag.is_set():
+                            print("H5WriterThread: Stop flag set and queue empty, exiting...")
+                            break
+                        print("H5WriterThread: Queue empty, waiting for more events...")
                         continue
 
-                if buffer:
-                    data = np.array(buffer, dtype=dt)
-                    dset.resize((dset.shape[0] + len(buffer),))
-                    dset[-len(buffer):] = data
-                    f.flush()
+                print(f"H5WriterThread: Total events processed: {self.event_count}")
+                print(f"H5WriterThread: Final dataset size: {dset.shape[0]}")
 
         except Exception as e:
             print(f"H5WriterThread: An error occurred while writing to the HDF5 file: {str(e)}")
         finally:
-            self.processing_done = True
+            self.processing_done.set()
             print("H5WriterThread: HDF5 file closed")
 
-    def add_event_to_queue(self, event, timestamp):
-        self.queue.put((event, timestamp))
-        print(f"H5WriterThread: Event added to H5 queue: {event} at {timestamp}")
+    def add_event_to_queue(self, event, stim_number, pulse_number, timestamp):
+        self.queue.put((event, stim_number, pulse_number, timestamp))
+        print(f"H5WriterThread: Event added to queue: {event} (Stim: {stim_number}, Pulse: {pulse_number}) at {timestamp}")
 
     def stop(self):
-        self.stop_flag = True
-        print("H5WriterThread: Stop flag set, thread stopping")
+        self.stop_flag.set()
+        print("H5WriterThread: Stop flag set, thread will stop after processing remaining events")
 
     def wait_until_done(self):
-        while not self.processing_done or not self.queue.empty():
-            self.msleep(100)
+        self.processing_done.wait()
+        print("H5WriterThread: Processing done")
+
+    def get_experiment_start_time(self):
+        return self.experiment_start_time
 
 class ExperimentThread(QThread):
     update_signal = pyqtSignal(str)
@@ -685,7 +709,7 @@ class ExperimentThread(QThread):
     def __init__(self, experiment):
         super().__init__()
         self.experiment = experiment
-        self.stop_flag = False
+        self.stop_flag = Event()
         self.board = None
         self.start_event = Event()
         self.camera_thread = None
@@ -693,6 +717,8 @@ class ExperimentThread(QThread):
         self.h5_writer = None
         self.h5_ready_event = Event()
         self.recording_duration = self.experiment.recording_duration
+        self.current_stim = -1
+        self.current_pulse = -1
 
     def run(self):
         try:
@@ -707,10 +733,10 @@ class ExperimentThread(QThread):
             self.update_signal.emit(f"Experiment ---- duration = {self.experiment.recording_duration}")
             
             valve_controller = ValveController(self.board)
+            valve_controller.valve_operated.connect(self.handle_valve_event)
             self.h5_writer = H5WriterThread('valve_timestamps.h5', self.start_event, self.h5_ready_event)
             self.h5_writer.start()
 
-            valve_controller.valve_operated.connect(self.h5_writer.add_event_to_queue)
             self.camera_thread = CameraThread(self.recording_duration, 30, self.start_event, self.camera_ready_event, video_filename)
             self.camera_thread.frame_ready.connect(self.frame_ready)
             self.camera_thread.log_signal.connect(self.update_signal)
@@ -727,17 +753,21 @@ class ExperimentThread(QThread):
             start_experiment_time = time.perf_counter()
             self.update_signal.emit(f"Experiment started at {start_experiment_time:.2f}s")
 
-            self.h5_writer.add_event_to_queue('experiment_start', monotonic())
-
             # Pre-period
             self.update_signal.emit(f"Pre stimulus period ---- duration = {self.experiment.pre_period}")
-            self.h5_writer.add_event_to_queue('pre_stimulus_start', monotonic())
+            self.h5_writer.add_event_to_queue('prestimulus_start', -1, -1, time.monotonic())
             self.sleep(self.experiment.pre_period)
-            self.h5_writer.add_event_to_queue('pre_stimulus_end', monotonic())
+            self.h5_writer.add_event_to_queue('pre_stimulus_end', -1, -1, monotonic())
             
             for stim in range(self.experiment.num_stim):
+                if self.stop_flag.is_set():
+                    break
+                self.current_stim = stim
                 self.update_signal.emit(f"Stimulus {stim+1} start")
                 for pulse in range(self.experiment.num_pulses):
+                    if self.stop_flag.is_set():
+                        break
+                    self.current_pulse = pulse
                     self.update_signal.emit(f"Opening valve for stimulus {stim+1}, pulse {pulse+1}")
                     valve_controller.operate_valve(self.experiment.ipi, stim, pulse)
                     self.sleep(self.experiment.ipi)
@@ -746,48 +776,49 @@ class ExperimentThread(QThread):
                 self.update_signal.emit(f"Stimulus {stim+1} end")
 
             # Post-period
-            self.update_signal.emit(f"Post stimulus period ---- duration = {self.experiment.post_period}")
-            self.h5_writer.add_event_to_queue('post_stimulus_start', monotonic())
-            self.sleep(self.experiment.post_period)
-            self.h5_writer.add_event_to_queue('post_stimulus_end', monotonic())
+            if not self.stop_flag.is_set():
+                self.update_signal.emit(f"Post stimulus period ---- duration = {self.experiment.post_period}")
+                self.h5_writer.add_event_to_queue('post_stimulus_start', -1, -1, monotonic())
+                self.sleep(self.experiment.post_period)
+                self.h5_writer.add_event_to_queue('post_stimulus_end', -1, -1, monotonic())
 
-            self.h5_writer.add_event_to_queue('experiment_end', monotonic())
+            self.h5_writer.add_event_to_queue('experiment_end', -1, -1, monotonic())
             self.update_signal.emit("Experiment completed successfully.")
         except Exception as e:
             self.update_signal.emit(f"An error occurred: {str(e)}")
         finally:
             self.cleanup()
 
+    def handle_valve_event(self, event, timestamp):
+        print(f"Event: {event}, Stim: {self.current_stim}, Pulse: {self.current_pulse}, Time: {timestamp}")
+        if event.startswith('valve_open'):
+            self.h5_writer.add_event_to_queue('valve_open', self.current_stim, self.current_pulse, timestamp)
+        elif event.startswith('valve_close'):
+            self.h5_writer.add_event_to_queue('valve_close', self.current_stim, self.current_pulse, timestamp)
     def sleep(self, seconds):
         start = monotonic()
-        while monotonic() - start < seconds and not self.stop_flag:
+        while monotonic() - start < seconds and not self.stop_flag.is_set():
             QThread.msleep(10)  # Sleep for short intervals to allow stopping
         actual_sleep = monotonic() - start
         self.update_signal.emit(f"Slept for {actual_sleep:.2f}s (intended: {seconds:.2f}s)")
 
     def cleanup(self):
-        if self.camera_thread:
-            self.update_signal.emit("Stopping camera thread...")
-            self.camera_thread.stop()
-            self.camera_thread.wait()
-            self.update_signal.emit("Camera thread stopped.")
+        self.stop_flag.set()
 
         if self.h5_writer:
             self.update_signal.emit("Stopping H5 writer thread...")
             self.h5_writer.stop()
             self.h5_writer.wait_until_done()
-            self.h5_writer.wait()
             self.update_signal.emit("H5 writer thread stopped.")
 
         if self.board:
             self.update_signal.emit("Closing Arduino connection...")
             self.board.exit()
             self.update_signal.emit("Arduino connection closed.")
-
         self.finished_signal.emit()
 
     def stop(self):
-        self.stop_flag = True
+        self.stop_flag.set()
 
 class ExperimentRunner(QObject):
     def __init__(self, experiment):
