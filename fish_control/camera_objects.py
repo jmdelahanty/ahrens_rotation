@@ -67,7 +67,7 @@ class CameraThread(QThread):
                     self.log_signal.emit(f"Camera dimensions: Width:{self.width} x Height:{self.height}")
 
                     self.log_signal.emit("CameraThread: Initializing video writer")
-                    fourcc = cv2.VideoWriter_fourcc(*'mpg4')
+                    fourcc = cv2.VideoWriter_fourcc(*'avc1')
                     self.video_writer = cv2.VideoWriter(str(self.video_file), fourcc, self.frame_rate, (self.width, self.height), isColor=True)
                     if not self.video_writer.isOpened():
                         raise ValueError("Could not open video writer")
