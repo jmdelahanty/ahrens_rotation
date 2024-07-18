@@ -2,8 +2,9 @@ import h5py
 import cv2
 import os
 from tabulate import tabulate
+from pathlib import Path
 
-def read_valve_timestamps(h5_filename='valve_timestamps.h5', video_filename='/home/jmdelahanty/gitrepos/ahrens_rotation/fish_control/20240710_experiment.mp4'):
+def read_valve_timestamps(h5_filename=None, video_filename=None):
     if not os.path.exists(h5_filename):
         print(f"Error: H5 file '{h5_filename}' not found.")
         return
@@ -21,6 +22,11 @@ def read_valve_timestamps(h5_filename='valve_timestamps.h5', video_filename='/ho
 
     with h5py.File(h5_filename, 'r') as f:
         print(f"H5 file opened: {h5_filename}")
+
+        # Print all attributes of the file
+        print("\nFile Attributes:")
+        for key, value in f.attrs.items():
+            print(f"{key}: {value}")
         
         if 'valve_events' not in f:
             print("Error: 'valve_events' dataset not found in the H5 file.")
@@ -77,4 +83,7 @@ def read_valve_timestamps(h5_filename='valve_timestamps.h5', video_filename='/ho
         print(f"Estimated total frames: {int((dataset[-1]['timestamp'] - first_timestamp) * frame_rate)}")
 
 if __name__ == "__main__":
-    read_valve_timestamps('valve_timestamps.h5')
+    read_valve_timestamps(
+        h5_filename = Path("D:/lgfl/sub-0001/20240716_rawdata_OnePortEtohExperiment/20240716_valve_timestamps.h5"),
+        video_filename = Path("D:/lgfl/sub-0001/20240716_rawdata_OnePortEtohExperiment/20240716_experiment.mp4")
+    )

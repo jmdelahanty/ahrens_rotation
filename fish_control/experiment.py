@@ -1,3 +1,4 @@
+import warnings
 from time import sleep
 
 class OnePortEtohExperiment:
@@ -12,9 +13,55 @@ class OnePortEtohExperiment:
         self._recording_duration = 0  # Initialize to 0
         self.frame_count = 0
         self.valve1_flag = False
+        self._left_syringe = None
+        self._right_syringe = None
+        self._etoh_concentration = None
         self._update_recording_duration()  # Calculate initial recording duration
         self.total_duration = self._recording_duration
         print(f"Initial recording duration: {self._recording_duration:.2f}s")
+
+    @property
+    def left_syringe(self):
+        return self._left_syringe
+
+    @left_syringe.setter
+    def left_syringe(self, value):
+        if value not in ['H2O', 'EtOH']:
+            warnings.warn("Invalid value for left_syringe. Must be 'H2O' or 'EtOH'. Setting left_syringe to None.")
+            self._left_syringe = None
+        else:
+            print(f"Setting left_syringe to {value}")
+            self._left_syringe = value
+
+    @property
+    def right_syringe(self):
+        return self._right_syringe
+
+    @right_syringe.setter
+    def right_syringe(self, value):
+        if value not in ['H2O', 'EtOH']:
+            warnings.warn("Invalid value for right_syringe. Must be 'H2O' or 'EtOH'. Setting right_syringe to None.")
+            self._right_syringe = None
+        else:
+            print(f"Setting right_syringe to {value}")
+            self._right_syringe = value
+
+    @property
+    def etoh_concentration(self):
+        return self._etoh_concentration
+
+    @etoh_concentration.setter
+    def etoh_concentration(self, value):
+        try:
+            if not (0 <= int(value) <= 100):
+                warnings.warn("Invalid value for etoh_concentration. Must be between 0 and 100. Setting etoh_concentration to None.")
+                self._etoh_concentration = None
+            else:
+                print(f"Setting etoh_concentration to {value}%")
+                self._etoh_concentration = value
+        except ValueError:
+            warnings.warn("Invalid value for etoh_concentration. Must be an integer. Setting etoh_concentration to None.")
+            self._etoh_concentration = None
 
     @property
     def pre_period(self):
@@ -85,7 +132,7 @@ class OnePortEtohExperiment:
             self._pre_period +
             self._num_stim * (self._ipi * 2 + self._isi) +
             self._post_period
-    )
+        )
 
     def _update_recording_duration(self):
         old_duration = self._recording_duration

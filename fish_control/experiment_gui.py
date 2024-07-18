@@ -1,21 +1,21 @@
-import sys
-from PyQt5.QtWidgets import (
-    QApplication, QWidget, QLabel, QLineEdit, QVBoxLayout, QPushButton, QDateEdit, QTextEdit, QFormLayout,
-    QListWidget, QDialog, QComboBox
-)
-from PyQt5.QtCore import Qt, pyqtSignal
-from datetime import datetime
-import experiment
-import inspect
-from pathlib import Path
-from PyQt5.QtGui import QPixmap, QImage
-from PyQt5.QtCore import Qt, QDate, pyqtSlot
-from experiment_thread import ValveController
+# Experiment GUI
 
-class ExperimentSelectorPopup(QDialog):
-    def __init__(self, subjects_directory: Path):
-        super().__init__()
-        self.subjects_directory = Path(subjects_directory)
+import inspect
+import json
+from datetime import datetime
+from pathlib import Path
+from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QDate
+from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtWidgets import (
+    QWidget, QLabel, QLineEdit, QVBoxLayout, QHBoxLayout,
+    QFormLayout, QPushButton, QDateEdit, QTextEdit, QMessageBox,
+    QComboBox, QDialog, QListWidget, 
+)
+
+from experiment_objects import ExperimentRunner
+import experiment
+
+class ExperimentSelectorWindow(QDialog):
     experiment_selected = pyqtSignal(object)
 
     def __init__(self, parent=None):
@@ -53,137 +53,198 @@ class ExperimentSelectorPopup(QDialog):
             selected_class = getattr(experiment, class_name)
             self.experiment_selected.emit(selected_class)
             self.accept()
-    
+
 class ExperimentConfigWindow(QWidget):
-    def __init__(self, subjects_directory: Path, parent=None):
+    def __init__(self, remote_dir=None, raw_data_directory= None, experiment_class=None):
         super().__init__()
-        self.subjects_directory = Path(subjects_directory)
-        self.experiment = None
-        self.subject_paths = {}
-        self.selected_experiment_name = ""
-        self.experiment_name_input = None
-        self.select_experiment()
-
-    def select_experiment(self):
-        selector = ExperimentSelectorPopup(self)
-        selector.experiment_selected.connect(self.on_experiment_selected)
-        selector.exec_()
-
-    def on_experiment_selected(self, experiment_class):
-        valve_controller = ValveController()  # Initialize the ValveController
-        self.experiment = experiment_class(valve_controller=valve_controller)  # Pass the valve_controller instance
-        self.selected_experiment_name = experiment_class.__name__
+        self.data_directory = Path(raw_data_directory)
+        self.remote_dir = Path(remote_dir)
+        self.experiment = experiment_class()
+        self.experiment_runner = None
+        print(f"Created experiment with:")
+        print(f"  Pre-period: {self.experiment.pre_period}s")
+        print(f"  Post-period: {self.experiment.post_period}s")
+        print(f"  Num stimuli: {self.experiment.num_stim}")
+        print(f"  Num pulses: {self.experiment.num_pulses}")
+        print(f"  IPI: {self.experiment.ipi}s")
+        print(f"  ISI: {self.experiment.isi}s")
+        print(f"  Recording duration: {self.experiment.recording_duration:.2f}s")
         self.initUI()
-
     def initUI(self):
-        self.setWindowTitle("Experiment Configuration")
-        self.setGeometry(100, 100, 400, 400)
+        main_layout = QHBoxLayout()
+        left_layout = QFormLayout()
+        right_layout = QVBoxLayout()
 
-        # Main layout
-        layout = QVBoxLayout()
-
-        # Form layout for better organization
-        form_layout = QFormLayout()
-
-        # Subject selection
+        # Left side (experiment configuration)
         self.subject_combo = QComboBox(self)
         self.populate_subject_combo()
-        self.subject_combo.currentTextChanged.connect(self.update_experiment_name)
-        form_layout.addRow("Subject:", self.subject_combo)
+        left_layout.addRow("Subject:", self.subject_combo)
 
-
-        # Dictionary to hold attribute names and their corresponding input fields
         self.input_fields = {}
-
-        # List of attributes to be displayed in the GUI
         attributes_to_display = [
-            'pre_period', 'post_period', 'ipi', 'isi', 'num_stim', 'num_pulses', 'recording_duration'
-        ]
-
-        # Dynamically create input fields based on the attributes of the Experiment instance
+            'pre_period', 'post_period', 'ipi', 'isi', 'num_stim', 'num_pulses', "left_syringe", "etoh_concentration",
+            'right_syringe', 'recording_duration'
+            ]
         for attr in attributes_to_display:
             value = getattr(self.experiment, attr)
             input_field = QLineEdit(self)
             input_field.setText(str(value))
             self.input_fields[attr] = input_field
-            form_layout.addRow(f"{attr.replace('_', ' ').capitalize()}:", input_field)
-            # Connect textChanged signal to update_experiment method
+            left_layout.addRow(f"{attr.replace('_', ' ').capitalize()}:", input_field)
             input_field.textChanged.connect(lambda _, a=attr: self.update_experiment(a))
 
-        # Make recording_duration read-only
         self.input_fields['recording_duration'].setReadOnly(True)
 
-        # Special handling for non-standard fields like experiment name, date, and notes
         self.experiment_name_input = QLineEdit(self)
         self.experiment_date_input = QDateEdit(self)
-        self.experiment_date_input.setDisplayFormat("yyyyMMdd")
-        self.experiment_date_input.setDate(datetime.today())
-        self.experiment_date_input.setCalendarPopup(True)
-        self.experiment_notes_input = QTextEdit(self)
+        self.experiment_date_input.setDate(QDate.currentDate())
+        left_layout.addRow("Experiment Name:", self.experiment_name_input)
+        left_layout.addRow("Experiment Date:", self.experiment_date_input)
 
-        form_layout.addRow("Experiment Name:", self.experiment_name_input)
-        form_layout.addRow("Experiment Date:", self.experiment_date_input)
-        form_layout.addRow("Experiment Notes:", self.experiment_notes_input)
+        self.run_button = QPushButton("Run Experiment", self)
+        self.run_button.clicked.connect(self.run_experiment)
+        left_layout.addRow(self.run_button)
 
-        # Save button
-        save_button = QPushButton("Save Experiment", self)
-        save_button.clicked.connect(self.save_experiment)
-        form_layout.addRow(save_button)
+        self.status_label = QLabel("Ready", self)
+        left_layout.addRow("Status:", self.status_label)
 
-        layout.addLayout(form_layout)
-        self.setLayout(layout)
+        # Right side (video display and log)
+        self.video_label = QLabel(self)
+        self.video_label.setFixedSize(640, 480)
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setText("Video feed will appear here")
+        right_layout.addWidget(self.video_label)
 
-    def update_experiment(self, attr):
-        value = self.input_fields[attr].text()
-        try:
-            setattr(self.experiment, attr, value)
-            
-            # Update the recording_duration field
-            self.input_fields['recording_duration'].setText(str(self.experiment.recording_duration))
-            
-            # Debug: Print all attributes
-            self.print_all_attributes()
-        except ValueError as e:
-            print(f"Invalid input for {attr}: {value}")
-            print(f"Error: {str(e)}")
+        self.log_display = QTextEdit(self)
+        self.log_display.setReadOnly(True)
+        right_layout.addWidget(self.log_display)
+
+        main_layout.addLayout(left_layout)
+        main_layout.addLayout(right_layout)
+        self.setLayout(main_layout)
+        self.update_experiment_name()
 
     def populate_subject_combo(self):
-        self.subject_paths.clear()  # Clear existing entries
-        for d in self.subjects_directory.iterdir():
+        for d in Path(self.remote_dir).iterdir():
             if d.is_dir():
-                subject_name = d.name
-                self.subject_paths[subject_name] = d
-                self.subject_combo.addItem(subject_name)
+                self.subject_combo.addItem(d.name)
         self.subject_combo.model().sort(0)
 
+    def update_experiment(self, attr):
+        try:
+            value = self.input_fields[attr].text()
+            if attr != 'recording_duration':
+                if isinstance(getattr(self.experiment, attr), int):
+                    value = int(value)
+                elif isinstance(getattr(self.experiment, attr), float):
+                    value = float(value)
+                print(f"Updating {attr} to {value}")
+                setattr(self.experiment, attr, value)
+                self.experiment._update_recording_duration()  # Call this after updating any parameter
+            
+            # Update the recording_duration field in the GUI
+            new_duration = self.experiment.recording_duration
+            print(f"New recording duration: {new_duration:.2f}s")
+            self.input_fields['recording_duration'].setText(str(new_duration))
+        except ValueError:
+            print(f"Invalid input for {attr}")
+    
     def update_experiment_name(self):
-        if self.experiment_name_input is None:
-            return  # Exit if experiment_name_input is not yet created
-        today = datetime.now().strftime("%Y%m%d")
         subject = self.subject_combo.currentText()
-        experiment_type = self.selected_experiment_name
-        default_name = f"{today}_{subject}_{experiment_type}"
-        self.experiment_name_input.setText(default_name)
+        experiment_type = type(self.experiment).__name__
+        date = datetime.now().strftime("%Y%m%d")
+        self.experiment_name_input.setText(f"{date}_{subject}_{experiment_type}")
 
-    def print_all_attributes(self):
-        print("\nCurrent Experiment Attributes:")
-        for attr in ['pre_period', 'post_period', 'ipi', 'isi', 'num_stim', 'num_pulses', 'recording_duration']:
-            value = getattr(self.experiment, attr)
-            print(f"{attr}: {value} (GUI: {self.input_fields[attr].text()})")
-        print()  # Add a blank line for readability
+    def run_experiment(self):
+        try:
+            self.check_vimba_import()
+            print("About to verify duration:")
+            print(f"Current recording duration: {self.experiment.recording_duration:.2f}s")
+            self.experiment.verify_duration()
+            self.save_experiment_config()
+            experiment_dir = self.data_directory / self.subject_combo.currentText() / self.experiment_name_input.text()
+            experiment_dir.mkdir(parents=True, exist_ok=True)
+            self.experiment_runner = ExperimentRunner(self.experiment, experiment_dir)
+            self.experiment_runner.experiment_thread.update_signal.connect(self.update_log)
+            self.experiment_runner.experiment_thread.finished_signal.connect(self.experiment_finished)
+            self.experiment_runner.experiment_thread.frame_ready.connect(self.update_video_feed)
 
-    def save_experiment(self):
+            self.log_display.append("Signal connections established")
+            
+            self.run_button.setEnabled(False)
+            self.experiment_runner.start_experiment()
+        except ValueError as e:
+            QMessageBox.warning(self, "Validation Error", str(e))
+            return
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"An error occurred: {str(e)}")
+            return
+
+    def check_vimba_import(self):
+        try:
+            from vimba import Vimba
+            self.log_display.append("Vimba import successful")
+        except ImportError as e:
+            self.log_display.append(f"Error importing Vimba: {str(e)}")
+        except Exception as e:
+            self.log_display.append(f"Unexpected error when importing Vimba: {str(e)}")
+
+    @pyqtSlot(str)
+    def update_log(self, message):
+        self.log_display.append(message)
+        self.log_display.verticalScrollBar().setValue(self.log_display.verticalScrollBar().maximum())
+        print(f"Log: {message}")  # Print to console for debugging
+
+    @pyqtSlot(QImage)
+    def update_video_feed(self, image):
+
+        try:
+
+            pixmap = QPixmap.fromImage(image)
+            
+            if image.isNull():
+                self.log_display.append("Received null QImage")
+                return
+            
+            pixmap = QPixmap.fromImage(image)
+            if pixmap.isNull():
+                self.log_display.append("Failed to create QPixmap from QImage")
+                return
+            self.video_label.setPixmap(pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        except Exception as e:
+            self.log_display.append(f"Error updating video feed, Line 224: {str(e)}")
+
+    @pyqtSlot(str)
+    def update_status(self, message):
+        self.status_label.setText(message)
+
+    def experiment_finished(self):
+        self.run_button.setEnabled(True)
+        QMessageBox.information(self, "Experiment Completed", "The experiment has finished.")
+        self.status_label.setText("Ready")
+
+    def save_experiment_config(self):
+        subject_id = self.subject_combo.currentText()
         experiment_name = self.experiment_name_input.text()
-        experiment_date = self.experiment_date_input.text()
-        experiment_notes = self.experiment_notes_input.toPlainText()
-
-        print("\nSaving Experiment:")
-        print(f"Experiment Name: {experiment_name}")
-        print(f"Experiment Date: {experiment_date}")
-        print(f"Experiment Notes: {experiment_notes}")
-        self.print_all_attributes()
-
-        print("Experiment configuration saved successfully.")
+        experiment_date = self.experiment_date_input.date().toString(Qt.ISODate)
         
-        # Close the window after saving
-        self.close()
+        config = {
+            "subject_id": subject_id,
+            "experiment_name": experiment_name,
+            "experiment_date": experiment_date,
+        }
+
+        # Add all experiment parameters to the config
+        for attr, field in self.input_fields.items():
+            config[attr] = field.text()
+
+        # Ensure the subject directory exists
+        subject_dir = Path(self.data_directory) / subject_id
+        subject_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save the config file
+        config_path = subject_dir / f"{experiment_name}_config.json"
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=4)
+
+        print(f"Experiment configuration saved to {config_path}")

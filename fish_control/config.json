@@ -1,3 +1,4 @@
 {
-    "data_directory": "/home/jmdelahanty/ahrens_data/lgfl/rawdata"
+    "raw_data_directory": "D:/lgfl",
+    "remote_data_directory": "Z:/lgfl"
 }
