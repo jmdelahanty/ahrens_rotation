@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
     QFormLayout, QPushButton, QDateEdit, QTextEdit, QMessageBox,
     QComboBox, QDialog, QListWidget, 
 )
+import sys
 
 from experiment_objects import ExperimentRunner
 import experiment
@@ -168,6 +169,7 @@ class ExperimentConfigWindow(QWidget):
             self.experiment_runner.experiment_thread.update_signal.connect(self.update_log)
             self.experiment_runner.experiment_thread.finished_signal.connect(self.experiment_finished)
             self.experiment_runner.experiment_thread.frame_ready.connect(self.update_video_feed)
+            self.experiment_runner.experiment_thread.show_popup.connect(self.show_start_popup)
 
             self.log_display.append("Signal connections established")
             
@@ -179,6 +181,19 @@ class ExperimentConfigWindow(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Error", f"An error occurred: {str(e)}")
             return
+    def show_start_popup(self):
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Information)
+        msg.setText("The experiment is ready to start.")
+        msg.setInformativeText("Click OK to begin the experiment.")
+        msg.setWindowTitle("Start Experiment")
+        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        result = msg.exec_()
+
+        if result == QMessageBox.Ok:
+            self.experiment_runner.experiment_thread.confirm_start()
+        else:
+            sys.exit()
 
     def check_vimba_import(self):
         try:

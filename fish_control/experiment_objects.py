@@ -35,6 +35,7 @@ class ExperimentThread(QThread):
     update_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
     frame_ready = pyqtSignal(QImage)
+    show_popup = pyqtSignal()
 
     def __init__(self, experiment, experiment_dir):
         super().__init__()
@@ -50,6 +51,7 @@ class ExperimentThread(QThread):
         self.recording_duration = self.experiment.recording_duration
         self.current_stim = -1
         self.current_pulse = -1
+        self.user_confirmed = Event()
 
     def run(self):
         try:
@@ -100,7 +102,9 @@ class ExperimentThread(QThread):
             self.h5_ready_event.wait()
             self.update_signal.emit("Camera and H5 writer ready.")
 
-            self.update_signal.emit("All Components started! Sending start event...")
+            self.update_signal.emit("All Components started! Waiting for user confirmation...")
+            self.show_popup.emit()
+            self.user_confirmed.wait()
             start_experiment_time = perf_counter()
             self.start_event.set()
             self.update_signal.emit(f"Experiment started at {start_experiment_time:.2f}s")
@@ -173,6 +177,9 @@ class ExperimentThread(QThread):
 
     def stop(self):
         self.stop_flag.set()
+    def confirm_start(self):
+        self.user_confirmed.set()
+        self.update_signal.emit("User confirmed experiment start.")
 
 class ExperimentRunner(QObject):
     update_signal = pyqtSignal(str)
