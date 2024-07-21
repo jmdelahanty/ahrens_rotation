@@ -12,7 +12,7 @@ from pydantic import ValidationError
 # Custom classes for equipment (ie. Incubator)
 from equipment import Incubator
 # Custom classes for metadata (ie. Metadata, IncubatorProperties, Breeding)
-from metadata import Metadata, IncubatorProperties, Breeding
+from metadata import Metadata, IncubatorProperties, Breeding, Dish
 from pathlib import Path
 
 class MetadataWindow(QWidget):
@@ -28,7 +28,8 @@ class MetadataWindow(QWidget):
         # Subject Information
         self.subject_id_input = QLineEdit(self)
         self.cross_id_input = QLineEdit(self)
-        self.dish_id = QLineEdit(self)
+        self.dish_number = QLineEdit(self)
+        self.subdish_number = QLineEdit(self)
         self.dof_input = QDateEdit(self)
         self.dof_input.setDisplayFormat("yyyyMMdd")
         self.dof_input.setDate(datetime.today())
@@ -48,7 +49,8 @@ class MetadataWindow(QWidget):
 
         layout.addRow("Subject ID:", self.subject_id_input)
         layout.addRow("Cross ID:", self.cross_id_input)
-        layout.addRow("Dish ID:", self.dish_id)
+        layout.addRow("Dish ID:", self.dish_number)
+        layout.addRow("Subdish ID:", self.subdish_number)
         layout.addRow("Date of Fertilization:", self.dof_input)
         layout.addRow("Genotype:", self.genotype_input)
         layout.addRow("Sex:", self.sex_input)
@@ -89,7 +91,10 @@ class MetadataWindow(QWidget):
             metadata = Metadata(
                 subject_id=self.subject_id_input.text(),
                 cross_id=self.cross_id_input.text(),
-                dish_id=self.dish_id.text(),
+                dish_id=Dish(
+                    dish_number=int(self.dish_number.text()),
+                    subdish_number=int(self.subdish_number.text())
+                ),
                 dof=self.dof_input.text(),
                 genotype=self.genotype_input.text(),
                 sex=self.sex_input.currentText(),
@@ -120,16 +125,17 @@ class MetadataWindow(QWidget):
             QMessageBox.warning(self, "Validation Error", str(e))
 
     def reset_gui_state(self):
-        self.cross_id_input.clear()
-        self.dish_id.clear()
+        # self.cross_id_input.clear()
         self.dof_input.setDate(datetime.today())
-        self.genotype_input.clear()
-        self.sex_input.setCurrentIndex(0)
+        # self.genotype_input.clear()
+        # self.sex_input.setCurrentIndex(0)
         self.species_input.setText("Danio rerio")
-        self.responsible.clear()
+        # self.responsible.clear()
         self.enclosure_input.setCurrentIndex(0)
-        self.parents_input.clear()
-        
+        # self.parents_input.clear()
+        # self.subdish_number.clear()
+        # self.dish_number.clear()
+
         # Automatically set the next subject ID
         next_subject_number = self.get_next_subject_number(self.remote_dir)
         self.subject_id_input.setText(f"sub-{next_subject_number:04d}")

@@ -89,23 +89,25 @@ class CameraThread(QThread):
                     self.log_signal.emit(f"CameraThread: Acquisition started at {self.start_time:.6f}")
     
                     # Filesize debugging
-                    last_size_check = self.start_time
-                    last_file_size = 0
+                    # last_size_check = self.start_time
+                    # last_file_size = 0
 
                     while self.frame_count < self.expected_frame_count and not self.stop_flag.is_set():
-                        current_time = perf_counter()
                         
-                        # Check file size every 5 seconds
-                        if current_time - last_size_check >= 5:
-                            if self.video_file.exists():
-                                current_file_size = os.path.getsize(self.video_file)
-                                size_increase = current_file_size - last_file_size
-                                self.log_signal.emit(f"Video file size: {current_file_size / 1024 / 1024:.2f} MB "
-                                                    f"(increased by {size_increase / 1024 / 1024:.2f} MB)")
-                                last_file_size = current_file_size
-                            else:
-                                self.log_signal.emit("Warning: Video file does not exist")
-                            last_size_check = current_time
+                        # Video file size debugging
+                        # current_time = perf_counter()
+                        
+                        # # Check file size every 5 seconds
+                        # if current_time - last_size_check >= 5:
+                        #     if self.video_file.exists():
+                        #         current_file_size = os.path.getsize(self.video_file)
+                        #         size_increase = current_file_size - last_file_size
+                        #         self.log_signal.emit(f"Video file size: {current_file_size / 1024 / 1024:.2f} MB "
+                        #                             f"(increased by {size_increase / 1024 / 1024:.2f} MB)")
+                        #         last_file_size = current_file_size
+                        #     else:
+                        #         self.log_signal.emit("Warning: Video file does not exist")
+                        #     last_size_check = current_time
 
                         sleep(0.001)  # Small sleep to prevent busy waiting
 
@@ -135,6 +137,13 @@ class CameraThread(QThread):
             self.log_signal.emit("CameraThread: Exiting run method")
 
     def frame_handler(self, cam: Camera, frame: Frame):
+        if not self.start_event.is_set():
+            try:
+                cam.queue_frame(frame)
+            except Exception as e:
+                self.log_signal.emit(f"Error queuing frame: {str(e)}")
+            return
+        
         if self.video_writer is None:
             try:
                 self.log_signal.emit("Video writer not ready, queuing frame")

@@ -12,6 +12,10 @@ class IncubatorProperties(BaseModel):
     light_cycle: LightCycle
     room: str
 
+class Dish(BaseModel):
+    dish_number: int
+    subdish_number: int
+
 class IncubatorModel(BaseModel):
     Left_Lab_Incubator: IncubatorProperties
     Right_Lab_Incubator: IncubatorProperties
@@ -24,7 +28,7 @@ class Metadata(BaseModel):
         arbitrary_types_allowed = True
     subject_id: str
     cross_id: str
-    dish_id: str
+    dish_id: Dish
     dof: str
     genotype: str
     sex: str

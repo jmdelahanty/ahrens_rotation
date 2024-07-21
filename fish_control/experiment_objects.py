@@ -74,7 +74,7 @@ class ExperimentThread(QThread):
             self.update_signal.emit("Compiling Firmata Sketch...")
             arduino.compile_sketch()
             self.update_signal.emit("Uploading Firmata Sketch...")
-            # arduino.upload_sketch()
+            arduino.upload_sketch()
             self.update_signal.emit("Standard Firmata setup complete!")
             self.board = pyfirmata.Arduino(arduino.board_com)
             self.update_signal.emit(f"Experiment ---- duration = {self.experiment.recording_duration}")
