@@ -1,8 +1,62 @@
 import warnings
 from time import sleep
 
+class EtOHBathExperiment:
+    always_display = ['pre_period', 'experiment_period']
+    def __init__(self, pre_period=300, experiment_period=900):
+        self._pre_period = pre_period
+        self._experiment_period = experiment_period
+        self._recording_duration = 0  # Initialize to 0
+        self._update_recording_duration()  # Calculate initial recording duration
+        self.total_duration = self._recording_duration
+        print(f"Initial recording duration: {self._recording_duration:.2f}s")
+
+    @property
+    def pre_period(self):
+        return self._pre_period
+    
+    @pre_period.setter
+    def pre_period(self, value):
+        print(f"Setting pre_period to {value}")
+        self._pre_period = int(value)
+        self._update_recording_duration()
+
+    @property
+    def experiment_period(self):
+        return self._experiment_period
+    
+    @experiment_period.setter
+    def experiment_period(self, value):
+        print(f"Setting experiment_period to {value}")
+        self._experiment_period = int(value)
+        self._update_recording_duration()
+
+    @property
+    def recording_duration(self):
+        return self._recording_duration
+    
+    def calculate_recording_duration(self):
+        return self._pre_period + self._experiment_period
+    
+    def _update_recording_duration(self):
+        old_duration = self._recording_duration
+        self._recording_duration = self.calculate_recording_duration()
+        print(f"Updating recording_duration:")
+        print(f"  Pre-period: {self._pre_period}s")
+        print(f"  Experiment period: {self._experiment_period}s")
+        print(f"  Old duration: {old_duration:.2f}s")
+        print(f"  New duration: {self._recording_duration:.2f}s")
+
+
 class OnePortEtohExperiment:
-    def __init__(self, valve_controller=None, pre_period=300, post_period=300, ipi=0.50, isi=60, num_stim=5, num_pulses=1):
+    always_display = ['pre_period', 'post_period', 'ipi', 'isi', 'num_stim', 'num_pulses', 
+                      'left_syringe', 'right_syringe', 'etoh_concentration']
+    
+    requires_camera = True
+    requires_arduino = True
+    requires_h5_logging = True
+
+    def __init__(self, pre_period=300, post_period=300, ipi=0.50, isi=60, num_stim=5, num_pulses=1):
         self.valve_controller = None
         self._pre_period = pre_period
         self._post_period = post_period
@@ -11,7 +65,6 @@ class OnePortEtohExperiment:
         self._num_stim = num_stim
         self._num_pulses = num_pulses
         self._recording_duration = 0  # Initialize to 0
-        self.frame_count = 0
         self.valve1_flag = False
         self._left_syringe = None
         self._right_syringe = None

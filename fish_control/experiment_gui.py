@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
 import sys
 
 from experiment_objects import ExperimentRunner
-import experiment
+import experiments
 
 class ExperimentSelectorWindow(QDialog):
     experiment_selected = pyqtSignal(object)
@@ -41,36 +41,29 @@ class ExperimentSelectorWindow(QDialog):
 
     def populate_experiment_list(self):
         # Get all classes from the experiment module
-        classes = inspect.getmembers(experiment, inspect.isclass)
+        classes = inspect.getmembers(experiments, inspect.isclass)
         for name, cls in classes:
             # Add the class name to the list if it's defined in the experiment module
-            if cls.__module__ == 'experiment':
+            if cls.__module__ == 'experiments':
                 self.list_widget.addItem(name)
 
     def on_select(self):
         selected_item = self.list_widget.currentItem()
         if selected_item:
             class_name = selected_item.text()
-            selected_class = getattr(experiment, class_name)
+            selected_class = getattr(experiments, class_name)
             self.experiment_selected.emit(selected_class)
             self.accept()
 
 class ExperimentConfigWindow(QWidget):
-    def __init__(self, remote_dir=None, raw_data_directory= None, experiment_class=None):
+    def __init__(self, remote_dir=None, raw_data_directory=None, experiment_class=None):
         super().__init__()
         self.data_directory = Path(raw_data_directory)
         self.remote_dir = Path(remote_dir)
         self.experiment = experiment_class()
         self.experiment_runner = None
-        print(f"Created experiment with:")
-        print(f"  Pre-period: {self.experiment.pre_period}s")
-        print(f"  Post-period: {self.experiment.post_period}s")
-        print(f"  Num stimuli: {self.experiment.num_stim}")
-        print(f"  Num pulses: {self.experiment.num_pulses}")
-        print(f"  IPI: {self.experiment.ipi}s")
-        print(f"  ISI: {self.experiment.isi}s")
-        print(f"  Recording duration: {self.experiment.recording_duration:.2f}s")
         self.initUI()
+
     def initUI(self):
         main_layout = QHBoxLayout()
         left_layout = QFormLayout()
@@ -82,19 +75,25 @@ class ExperimentConfigWindow(QWidget):
         left_layout.addRow("Subject:", self.subject_combo)
 
         self.input_fields = {}
-        attributes_to_display = [
-            'pre_period', 'post_period', 'ipi', 'isi', 'num_stim', 'num_pulses', "left_syringe", "etoh_concentration",
-            'right_syringe', 'recording_duration'
-            ]
-        for attr in attributes_to_display:
-            value = getattr(self.experiment, attr)
-            input_field = QLineEdit(self)
-            input_field.setText(str(value))
-            self.input_fields[attr] = input_field
-            left_layout.addRow(f"{attr.replace('_', ' ').capitalize()}:", input_field)
-            input_field.textChanged.connect(lambda _, a=attr: self.update_experiment(a))
+        
+        # Get the always_display list from the experiment class
+        always_display = getattr(self.experiment, 'always_display', [])
 
+        # First, add the always-display attributes
+        for attr in always_display:
+            if hasattr(self.experiment, attr):
+                self.add_input_field(attr, left_layout)
+
+        # Then, add any additional properties from the experiment class
+        for attr, value in inspect.getmembers(self.experiment):
+            if isinstance(value, property) and attr not in always_display and attr != 'recording_duration':
+                self.add_input_field(attr, left_layout)
+
+        # Add recording_duration field separately as it's read-only
+        self.input_fields['recording_duration'] = QLineEdit(self)
         self.input_fields['recording_duration'].setReadOnly(True)
+        self.input_fields['recording_duration'].setText(str(self.experiment.recording_duration))
+        left_layout.addRow("Recording duration:", self.input_fields['recording_duration'])
 
         self.experiment_name_input = QLineEdit(self)
         self.experiment_date_input = QDateEdit(self)
@@ -124,6 +123,13 @@ class ExperimentConfigWindow(QWidget):
         main_layout.addLayout(right_layout)
         self.setLayout(main_layout)
         self.update_experiment_name()
+
+    def add_input_field(self, attr, layout):
+        input_field = QLineEdit(self)
+        input_field.setText(str(getattr(self.experiment, attr)))
+        self.input_fields[attr] = input_field
+        layout.addRow(f"{attr.replace('_', ' ').capitalize()}:", input_field)
+        input_field.textChanged.connect(lambda _, a=attr: self.update_experiment(a))
 
     def populate_subject_combo(self):
         for d in Path(self.remote_dir).iterdir():

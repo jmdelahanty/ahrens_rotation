@@ -43,7 +43,7 @@ from experiment_gui import ExperimentSelectorWindow, ExperimentConfigWindow
 
 ### CUSTOM CLASSES ###
 # Import the experiment module
-import experiment
+import experiments
 
 # Set static config file location
 CONFIG_FILE = "config.json"
@@ -152,7 +152,7 @@ class ExperimentSelectorPopup(QDialog):
 
     def populate_experiment_list(self):
         # Get all classes from the experiment module
-        classes = inspect.getmembers(experiment, inspect.isclass)
+        classes = inspect.getmembers(experiments, inspect.isclass)
         for name, cls in classes:
             # Add the class name to the list if it's defined in the experiment module
             if cls.__module__ == 'experiment':
@@ -162,7 +162,7 @@ class ExperimentSelectorPopup(QDialog):
         selected_item = self.list_widget.currentItem()
         if selected_item:
             class_name = selected_item.text()
-            selected_class = getattr(experiment, class_name)
+            selected_class = getattr(experiments, class_name)
             self.experiment_selected.emit(selected_class)
             self.accept()
 
