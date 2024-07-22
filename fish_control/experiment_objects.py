@@ -15,14 +15,63 @@ import sys
 import json
 from camera_objects import CameraThread
 
+STATIC_FIRMATA_PATH = Path("C:/Users/delahantyj/Documents/Arduino/libraries/Firmata/examples/StandardFirmata/StandardFirmata.ino")
+
+class CleanupThread(QThread):
+    update_signal = pyqtSignal(str)
+    
+    def __init__(self, data_directory):
+        super().__init__()
+        self.data_directory = Path(data_directory)
+        self.valve_controller = None
+        self.stop_flag = False
+
+    def run(self):
+        try:
+            self.update_signal.emit("Initializing cleanup process...")
+            self.setup_arduino()
+            self.valve_controller.start_cleanup()
+            self.update_signal.emit("Cleanup started. Valve opened.")
+            
+            while not self.stop_flag:
+                self.msleep(100)  # Check stop flag every 100ms
+            
+            self.valve_controller.stop_cleanup()
+            self.update_signal.emit("Cleanup stopped. Valve closed.")
+        except Exception as e:
+            self.update_signal.emit(f"Error during cleanup: {str(e)}")
+        finally:
+            if self.valve_controller:
+                try:
+                    self.valve_controller.cleanup_finished.disconnect()
+                    self.valve_controller.disconnect()  # Disconnect from Arduino
+                    self.update_signal.emit("Disconnected from Arduino.")
+                except Exception as e:
+                    self.update_signal.emit(f"Error disconnecting from Arduino: {str(e)}")
+            self.update_signal.emit("Cleanup process finished.")
+
+    def setup_arduino(self):
+        self.update_signal.emit("Setting up Arduino for cleanup...")
+        # You might need to adjust this part based on your Arduino setup
+        board = pyfirmata.Arduino('COM3')  # Replace 'COM3' with your Arduino port
+        self.valve_controller = ValveController(board)
+        self.valve_controller.cleanup_finished.connect(self.quit)
+
+    def stop_cleanup(self):
+        self.stop_flag = True
+
+
 class ValveController(QObject):
     valve_operated = pyqtSignal(str, float)
+    cleanup_finished = pyqtSignal()
 
     def __init__(self, board):
         super().__init__()
+        self.board = board
         self.valve1 = board.digital[4]
         self.valve1.mode = pyfirmata.OUTPUT
         self.valve1.write(0)
+        self.cleanup_mode = False
 
     def operate_valve(self, duration, stim_num, pulse_num):
         self.valve1.write(1)
@@ -31,10 +80,25 @@ class ValveController(QObject):
         self.valve1.write(0)
         self.valve_operated.emit(f'valve_close_{stim_num}_{pulse_num}', monotonic())
 
+    def start_cleanup(self):
+        self.cleanup_mode = True
+        self.valve1.write(1)
+
+    def stop_cleanup(self):
+        if self.cleanup_mode:
+            self.cleanup_mode = False
+            self.valve1.write(0)
+            self.cleanup_finished.emit()  # Emit the cleanup_finished signal
+    def disconnect(self):
+        if self.board:
+            self.board.exit()
+            self.board = None
+
 class ExperimentThread(QThread):
     update_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
     frame_ready = pyqtSignal(QImage)
+    request_confirmation = pyqtSignal(str, str) # Request confirmation from the user before starting the experiment (title, message)
 
     def __init__(self, experiment, experiment_dir):
         super().__init__()
@@ -51,93 +115,96 @@ class ExperimentThread(QThread):
         self.current_stim = -1
         self.current_pulse = -1
         self.user_confirmed = Event()
+        self.video_filename = None
+        self.h5_filename = None
+
+    def setup_arduino(self):
+        self.update_signal.emit("Setting up Arduino...")
+        arduino_boards = Arduino.list_boards()
+        if not arduino_boards:
+            raise ValueError("No Arduino boards found. Please ensure the board is connected and the Arduino CLI is installed correctly.")
+        if len(arduino_boards) > 1:
+            self.update_signal.emit("Multiple Arduino boards detected. Using the first one.")
+        
+        selected_board = arduino_boards[0]
+        self.update_signal.emit(f"Selected board: {selected_board[0]} on {selected_board[2]}")
+        arduino = Arduino(sketch_path=STATIC_FIRMATA_PATH, idx=0)
+        self.update_signal.emit("Compiling Firmata Sketch...")
+        arduino.compile_sketch()
+        self.update_signal.emit("Uploading Firmata Sketch...")
+        # arduino.upload_sketch()
+        self.update_signal.emit("Standard Firmata setup complete!")
+        self.board = pyfirmata.Arduino(arduino.board_com)
+        self.update_signal.emit(f"Arduino board initialized on {arduino.board_com}")
+
+    def setup_camera(self):
+        self.update_signal.emit("Setting up camera...")
+        self.camera_thread = CameraThread(self.recording_duration, 30, self.start_event, self.camera_ready_event, self.video_filename)
+        self.camera_thread.frame_ready.connect(self.frame_ready)
+        self.camera_thread.log_signal.connect(self.update_signal)
+        self.camera_thread.start()
+
+    def setup_h5_writer(self):
+        self.update_signal.emit("Setting up H5 writer...")
+        self.h5_writer = H5WriterThread(self.h5_filename, self.start_event, self.h5_ready_event)
+        self.h5_writer.start()
+
+    def wait_for_components(self):
+        if self.camera_thread:
+            self.camera_ready_event.wait()
+        if self.h5_writer:
+            self.h5_ready_event.wait()
+
+    def cleanup(self):
+        self.stop_flag.set()
+        if self.h5_writer:
+            self.update_signal.emit("Stopping H5 writer thread...")
+            self.h5_writer.stop()
+            self.h5_writer.wait_until_done()
+        if self.board:
+            self.update_signal.emit("Closing Arduino connection...")
+            self.board.exit()
+        self.finished_signal.emit()
+
+    def stop(self):
+        self.stop_flag.set()
+
+    def sleep(self, duration):
+        start_time = monotonic()
+        while monotonic() - start_time < duration and not self.stop_flag.is_set():
+            sleep(0.1)  # Sleep in short intervals to allow for stopping
 
     def run(self):
         try:
             # Generate filenames
             timestamp = datetime.now().strftime("%Y%m%d")
-            video_filename = self.experiment_dir / f"{timestamp}_experiment.mp4"
-            h5_filename = self.experiment_dir / f"{timestamp}_valve_timestamps.h5"
+            self.video_filename = self.experiment_dir / f"{timestamp}_experiment.mp4"
+            self.h5_filename = self.experiment_dir / f"{timestamp}_valve_timestamps.h5"
 
-            self.update_signal.emit("Setting up Arduino connection...")
-            self.update_signal.emit("Checking for available boards...")
-            arduino_boards = Arduino.list_boards()
-            if not arduino_boards:
-                raise ValueError("No Arduino boards found. Please ensure the board is connected and the Arduino CLI is installed correctly.")
-            if len(arduino_boards) > 1:
-                self.update_signal.emit("Multiple Arduino boards detected. Using the first one.")
-            
-            selected_board = arduino_boards[0]
-            self.update_signal.emit(f"Selected board: {selected_board[0]} on {selected_board[2]}")
-            arduino = Arduino(sketch_path=Path("C:/Users/delahantyj/Documents/Arduino/libraries/Firmata/examples/StandardFirmata/StandardFirmata.ino"), idx=0)
-            self.update_signal.emit("Compiling Firmata Sketch...")
-            arduino.compile_sketch()
-            self.update_signal.emit("Uploading Firmata Sketch...")
-            # arduino.upload_sketch()
-            self.update_signal.emit("Standard Firmata setup complete!")
-            self.board = pyfirmata.Arduino(arduino.board_com)
-            self.update_signal.emit(f"Experiment ---- duration = {self.experiment.recording_duration}")
+            self.update_signal.emit("Setting up experiment components...")
 
-            
-            valve_controller = ValveController(self.board)
-            valve_controller.valve_operated.connect(self.handle_valve_event)
-            self.h5_writer = H5WriterThread(h5_filename, self.start_event, self.h5_ready_event)
-            self.h5_writer.start()
+            # Setup the components based on experiment requirements
+            self.setup_components()
 
-            self.update_signal.emit("About to create CameraThread")
-            self.camera_thread = CameraThread(self.recording_duration, 30, self.start_event, self.camera_ready_event, video_filename)
-            self.update_signal.emit("CameraThread created")
-            
-            self.camera_thread.frame_ready.connect(self.frame_ready)
-            self.camera_thread.log_signal.connect(self.update_signal)
-            self.update_signal.emit("CameraThread signals connected")
-            
-            self.camera_thread.start()
-            self.update_signal.emit("CameraThread started")
+            # Wait for all components to be ready
+            self.wait_for_components()
 
-            # Wait for both the camera and H5 writer to be ready before starting the experiment
-            self.update_signal.emit("Waiting for camera and H5 writer to be ready...")
-            self.camera_ready_event.wait()
-            self.h5_ready_event.wait()
-            self.update_signal.emit("Camera and H5 writer ready.")
+            self.update_signal.emit("All components ready. Starting experiment...")
 
-            self.update_signal.emit("All Components started! Waiting for user confirmation...")
-            self.show_popup.emit()
+            # Request user confirmation
+            self.request_confirmation.emit("Start Experiment", "All components ready. Click OK to start!")
+
+            # Wait for user confirmation
             self.user_confirmed.wait()
+
+            self.update_signal.emit("All components ready. Starting experiment...")
             start_experiment_time = perf_counter()
             self.start_event.set()
             self.update_signal.emit(f"Experiment started at {start_experiment_time:.2f}s")
 
-            # Pre-period
-            self.update_signal.emit(f"Pre stimulus period ---- duration = {self.experiment.pre_period}")
-            self.h5_writer.add_event_to_queue('prestimulus_start', -1, -1, monotonic())
-            self.sleep(self.experiment.pre_period)
-            self.h5_writer.add_event_to_queue('pre_stimulus_end', -1, -1, monotonic())
-            
-            for stim in range(self.experiment.num_stim):
-                if self.stop_flag.is_set():
-                    break
-                self.current_stim = stim
-                self.update_signal.emit(f"Stimulus {stim+1} start")
-                for pulse in range(self.experiment.num_pulses):
-                    if self.stop_flag.is_set():
-                        break
-                    self.current_pulse = pulse
-                    self.update_signal.emit(f"Opening valve for stimulus {stim+1}, pulse {pulse+1}")
-                    valve_controller.operate_valve(self.experiment.ipi, stim, pulse)
-                    self.sleep(self.experiment.ipi)
-                    self.update_signal.emit(f"Closing valve for stimulus {stim+1}, pulse {pulse+1}")
-                self.sleep(self.experiment.isi)
-                self.update_signal.emit(f"Stimulus {stim+1} end")
+            # Run the experiment
+            self.experiment.run(self)
 
-            # Post-period
-            if not self.stop_flag.is_set():
-                self.update_signal.emit(f"Post stimulus period ---- duration = {self.experiment.post_period}")
-                self.h5_writer.add_event_to_queue('post_stimulus_start', -1, -1, monotonic())
-                self.sleep(self.experiment.post_period)
-                self.h5_writer.add_event_to_queue('post_stimulus_end', -1, -1, monotonic())
-
-            self.h5_writer.add_event_to_queue('experiment_end', -1, -1, monotonic())
             self.update_signal.emit("Experiment completed successfully.")
         except Exception as e:
             self.update_signal.emit(f"An error occurred: {str(e)}")
@@ -146,12 +213,6 @@ class ExperimentThread(QThread):
         finally:
             self.cleanup()
 
-    def handle_valve_event(self, event, timestamp):
-        print(f"Event: {event}, Stim: {self.current_stim}, Pulse: {self.current_pulse}, Time: {timestamp}")
-        if event.startswith('valve_open'):
-            self.h5_writer.add_event_to_queue('valve_open', self.current_stim, self.current_pulse, timestamp)
-        elif event.startswith('valve_close'):
-            self.h5_writer.add_event_to_queue('valve_close', self.current_stim, self.current_pulse, timestamp)
     def sleep(self, seconds):
         start = monotonic()
         while monotonic() - start < seconds and not self.stop_flag.is_set():
@@ -174,9 +235,18 @@ class ExperimentThread(QThread):
             self.update_signal.emit("Arduino connection closed.")
         self.finished_signal.emit()
 
+    def setup_components(self):
+        if getattr(self.experiment, 'requires_camera', False):
+            self.setup_camera()
+        if getattr(self.experiment, 'requires_arduino', False):
+            self.setup_arduino()
+        if getattr(self.experiment, 'requires_h5_logging', False):
+            self.setup_h5_writer()
+
     def stop(self):
         self.stop_flag.set()
-    def confirm_start(self):
+
+    def user_confirmation_received(self):
         self.user_confirmed.set()
         self.update_signal.emit("User confirmed experiment start.")
 
@@ -266,7 +336,7 @@ class H5WriterThread(QThread):
     def wait_until_done(self):
         self.processing_done.wait()
         print("H5WriterThread: Processing done")
-    
+
 class Arduino:
     """
     Generic Arduino class for interacting with arbitrary Arduino boards.

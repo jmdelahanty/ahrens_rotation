@@ -84,6 +84,6 @@ def read_valve_timestamps(h5_filename=None, video_filename=None):
 
 if __name__ == "__main__":
     read_valve_timestamps(
-        h5_filename = Path("D:/lgfl/sub-0001/20240716_rawdata_OnePortEtohExperiment/20240716_valve_timestamps.h5"),
-        video_filename = Path("D:/lgfl/sub-0001/20240716_rawdata_OnePortEtohExperiment/20240716_experiment.mp4")
+        h5_filename = Path("D:/lgfl/sub-0000/20240721_rawdata_OnePortEtohExperiment/20240721_valve_timestamps.h5"),
+        video_filename = Path("D:/lgfl/sub-0000/20240721_rawdata_OnePortEtohExperiment/20240721_experiment.mp4")
     )

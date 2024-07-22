@@ -11,9 +11,8 @@ from PyQt5.QtWidgets import (
     QFormLayout, QPushButton, QDateEdit, QTextEdit, QMessageBox,
     QComboBox, QDialog, QListWidget, 
 )
-import sys
 
-from experiment_objects import ExperimentRunner
+from experiment_objects import ExperimentRunner, CleanupThread
 import experiments
 
 class ExperimentSelectorWindow(QDialog):
@@ -62,6 +61,8 @@ class ExperimentConfigWindow(QWidget):
         self.remote_dir = Path(remote_dir)
         self.experiment = experiment_class()
         self.experiment_runner = None
+        self.cleanup_thread = None
+        self.cleanup_in_progress = False
         self.initUI()
 
     def initUI(self):
@@ -105,6 +106,11 @@ class ExperimentConfigWindow(QWidget):
         self.run_button.clicked.connect(self.run_experiment)
         left_layout.addRow(self.run_button)
 
+        # Add the cleanup button
+        self.cleanup_button = QPushButton("Start Cleanup", self)
+        self.cleanup_button.clicked.connect(self.toggle_cleanup)
+        left_layout.addRow(self.cleanup_button)
+
         self.status_label = QLabel("Ready", self)
         left_layout.addRow("Status:", self.status_label)
 
@@ -123,6 +129,38 @@ class ExperimentConfigWindow(QWidget):
         main_layout.addLayout(right_layout)
         self.setLayout(main_layout)
         self.update_experiment_name()
+
+    def toggle_cleanup(self):
+        if self.cleanup_in_progress:
+            self.stop_cleanup()
+        else:
+            self.start_cleanup()
+
+    def start_cleanup(self):
+        reply = QMessageBox.question(self, "Start Cleanup", 
+                                     "Are you sure you want to start the cleanup process?",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.cleanup_thread = CleanupThread(self.data_directory)
+            self.cleanup_thread.update_signal.connect(self.update_log)
+            self.cleanup_thread.finished.connect(self.on_cleanup_finished)
+            self.cleanup_thread.start()
+            self.cleanup_in_progress = True
+            self.cleanup_button.setText("Stop Cleanup")
+
+    def stop_cleanup(self):
+        reply = QMessageBox.question(self, "Stop Cleanup", 
+                                     "Are you sure you want to stop the cleanup process?",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            if self.cleanup_thread:
+                self.cleanup_thread.stop_cleanup()
+            self.update_log("Cleanup stopping. Valve will close shortly.")
+
+    def on_cleanup_finished(self):
+        self.cleanup_in_progress = False
+        self.cleanup_button.setText("Start Cleanup")
+        self.cleanup_thread = None
 
     def add_input_field(self, attr, layout):
         input_field = QLineEdit(self)
@@ -175,7 +213,7 @@ class ExperimentConfigWindow(QWidget):
             self.experiment_runner.experiment_thread.update_signal.connect(self.update_log)
             self.experiment_runner.experiment_thread.finished_signal.connect(self.experiment_finished)
             self.experiment_runner.experiment_thread.frame_ready.connect(self.update_video_feed)
-            self.experiment_runner.experiment_thread.show_popup.connect(self.show_start_popup)
+            self.experiment_runner.experiment_thread.request_confirmation.connect(self.request_user_confirmation)
 
             self.log_display.append("Signal connections established")
             
@@ -187,19 +225,6 @@ class ExperimentConfigWindow(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Error", f"An error occurred: {str(e)}")
             return
-    def show_start_popup(self):
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Information)
-        msg.setText("The experiment is ready to start.")
-        msg.setInformativeText("Click OK to begin the experiment.")
-        msg.setWindowTitle("Start Experiment")
-        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
-        result = msg.exec_()
-
-        if result == QMessageBox.Ok:
-            self.experiment_runner.experiment_thread.confirm_start()
-        else:
-            sys.exit()
 
     def check_vimba_import(self):
         try:
@@ -269,3 +294,14 @@ class ExperimentConfigWindow(QWidget):
             json.dump(config, f, indent=4)
 
         print(f"Experiment configuration saved to {config_path}")
+
+    @pyqtSlot(str, str)
+    def request_user_confirmation(self, title, message):
+        reply = QMessageBox.question(self, title, message, 
+                                    QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Cancel)
+        if reply == QMessageBox.Ok:
+            self.experiment_runner.experiment_thread.user_confirmation_received()
+        else:
+            self.experiment_runner.experiment_thread.stop()
+            self.run_button.setEnabled(True)
+            QMessageBox.information(self, "Experiment Cancelled", "The experiment has been cancelled.")
