@@ -205,6 +205,56 @@ def test_video_writer():
     else:
         print("File was not created")
 
-test_video_writer()
+# Basler Camera Test
+import pypylon.pylon as pylon
 
-# print_opencv_backend_info()
+def test_basler_camera():
+    try:
+        converter = pylon.ImageFormatConverter()
+
+        # converting to opencv bgr format
+        converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+        converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+        tlf = pylon.TlFactory.GetInstance()
+        cam = pylon.InstantCamera(tlf.CreateFirstDevice())
+        cam.Open()
+
+        # Configure camera settings
+        cam.Width.Value = cam.Width.Max
+        cam.Height.Value = cam.Height.Max
+        cam.CenterX.Value = True
+        cam.CenterY.Value = True
+        cam.ExposureTime.Value = 30000
+        cam.AcquisitionFrameRateEnable.Value = True
+        cam.AcquisitionFrameRate.Value = 30
+        frame_count = 0
+        cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+        cv2.namedWindow("Basler Camera", cv2.WINDOW_NORMAL)
+        video_writer = cv2.VideoWriter('basler_output.mp4', cv2.VideoWriter_fourcc(*'avc1'), 30, (cam.Width.Value, cam.Height.Value), isColor=False)
+        while cam.IsGrabbing() and frame_count < 1000:
+            grab_result = cam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+            
+            if grab_result.GrabSucceeded():
+                image = converter.Convert(grab_result)
+                img = image.GetArray()
+                # convert image to grayscale
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                video_writer.write(img)
+
+                cv2.imshow("Basler Camera", img)
+                k = cv2.waitKey(1)
+                if k == 27:
+                    break
+
+                frame_count += 1
+            
+            grab_result.Release()
+
+        cam.StopGrabbing()
+        # cam.Close()
+        cv2.video_writer.release()
+        cv2.destroyAllWindows()
+    except Exception as e:
+        print(f"Error: {str(e)}")
+
+test_basler_camera()

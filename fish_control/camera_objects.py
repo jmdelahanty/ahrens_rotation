@@ -2,33 +2,161 @@ from PyQt5.QtCore import QObject, pyqtSignal, QThread
 from PyQt5.QtGui import QImage
 from threading import Event
 from time import perf_counter, sleep
-from typing import Tuple
 import os
 import sys
 import cv2
 import numpy as np
 from vimba import Vimba, Camera, Frame, VimbaCameraError, PixelFormat
+from abc import ABC, abstractmethod, ABCMeta
+from queue import Queue, Empty
 
+class DiskWriterThread(QThread):
+    log_signal = pyqtSignal(str)
 
-class CameraThread(QThread):
+    def __init__(self, video_file, frame_rate, frame_size, disk_writer_ready_event, isColor=True, start_event=None):
+        super().__init__()
+        self.video_file = video_file
+        self.frame_rate = frame_rate
+        self.frame_size = frame_size
+        self.isColor = isColor
+        self.start_event = start_event
+        self.disk_writer_ready_event = disk_writer_ready_event
+        self.queue = Queue()
+        self.running = True
+        self.video_writer = None
+        self.frames_written = 0
+        self.frames_received = 0
+
+    def run(self):
+        try:
+            self.log_signal.emit("DiskWriterThread: Starting run method")
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')
+            self.log_signal.emit(f"DiskWriterThread: Initializing VideoWriter with file {self.video_file}, "
+                                 f"frame rate {self.frame_rate}, frame size {self.frame_size}, isColor={self.isColor}")
+            self.video_writer = cv2.VideoWriter(str(self.video_file), fourcc, self.frame_rate, 
+                                                self.frame_size, isColor=self.isColor)
+            
+            if not self.video_writer.isOpened():
+                raise IOError("Failed to open video writer")
+            else:
+                pass
+
+            self.log_signal.emit("DiskWriterThread: VideoWriter initialized successfully")
+            self.disk_writer_ready_event.set()
+            self.log_signal.emit("DiskWriterThread: Ready event set, waiting for start event")
+            
+            if self.start_event:
+                self.log_signal.emit("DiskWriterThread: Waiting for start event...")
+                self.start_event.wait()
+                self.log_signal.emit("DiskWriterThread: Start event received. Beginning video writing")
+            else:
+
+                self.log_signal.emit("DiskWriterThread: No start event provided, beginning video writing immediately")
+
+            self.log_signal.emit("DiskWriterThread: Entering main processing loop")
+            while self.running or not self.queue.empty():
+                try:
+                    frame = self.queue.get(timeout=1)
+                    if frame is not None:
+                        # If the frame shape is only 2d, reshape into color image with opencv
+                        if len(frame.shape) == 2:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                        self.frames_received += 1
+                        try:
+                            self.video_writer.write(frame)
+                            self.frames_written += 1
+                        except Exception as e:
+                            print(f"Error writing frame: {str(e)}")
+                    
+                    self.queue.task_done()
+                except Empty:
+                    if not self.running and self.queue.empty():
+                        self.log_signal.emit("DiskWriterThread: Queue empty and not running, exiting loop")
+                        break
+                    self.log_signal.emit("DiskWriterThread: Queue is empty, waiting for more frames")
+                    continue
+        except Exception as e:
+            self.log_signal.emit(f"DiskWriterThread: Error during execution - {str(e)}")
+            import traceback
+            self.log_signal.emit(traceback.format_exc())
+        finally:
+            self.finalize()
+
+    def add_frame(self, frame):
+        self.queue.put(frame)
+        if self.queue.qsize() % 10 == 0:
+            self.log_signal.emit(f"DiskWriterThread: Queue size is now {self.queue.qsize()}")
+
+    def stop(self):
+        self.log_signal.emit("DiskWriterThread: Stop requested")
+        self.running = False
+        self.wait()
+
+    def finalize(self):
+        self.log_signal.emit("DiskWriterThread: Finalizing")
+        frames_remaining = self.queue.qsize()
+        self.log_signal.emit(f"DiskWriterThread: {frames_remaining} frames remaining in queue")
+        while not self.queue.empty():
+            try:
+                frame = self.queue.get(timeout=1)
+                if frame is not None and self.video_writer is not None:
+                    write_result = self.video_writer.write(frame)
+                    if write_result:
+                        self.frames_written += 1
+                    else:
+                        self.log_signal.emit(f"DiskWriterThread: Failed to write frame during finalization")
+                self.queue.task_done()
+            except Empty:
+                break
+        if self.video_writer is not None:
+            self.video_writer.release()
+            self.log_signal.emit(f"DiskWriterThread: VideoWriter released. Total frames written: {self.frames_written}")
+            self.log_signal.emit(f"DiskWriterThread: Total frames received: {self.frames_received}")
+        else:
+            self.log_signal.emit("DiskWriterThread: VideoWriter was not initialized")
+        
+        # Check if the video file was created and has content
+        if os.path.exists(self.video_file):
+            file_size = os.path.getsize(self.video_file)
+            self.log_signal.emit(f"DiskWriterThread: Video file size: {file_size} bytes")
+        else:
+            self.log_signal.emit("DiskWriterThread: Video file was not created")
+
+class ThreadABCMeta(type(QThread), ABCMeta):
+    pass
+
+class BaseCameraThread(QThread, ABC, metaclass=ThreadABCMeta):
     frame_ready = pyqtSignal(QImage)
     log_signal = pyqtSignal(str)
 
     def __init__(self, duration, frame_rate, start_event, camera_ready_event, video_file):
         super().__init__()
+        self.duration = duration
         self.frame_rate = frame_rate
-        self.duration = duration + (2 / self.frame_rate)
         self.start_event = start_event
         self.camera_ready_event = camera_ready_event
         self.video_file = video_file
         self.video_writer = None
-        self.camera_width = 0
-        self.camera_height = 0
         self.expected_frame_count = int(self.frame_rate * self.duration)
         self.frame_count = 0
         self.stop_flag = Event()
-        self.start_time = None
-        self.last_frame_time = 0
+
+    @abstractmethod
+    def run(self):
+        pass
+
+    @abstractmethod
+    def stop(self):
+        pass
+
+class VimbaCameraThread(BaseCameraThread):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from vimba import Vimba, Camera, Frame, VimbaCameraError, PixelFormat
+        self.Vimba = Vimba
+        self.PixelFormat = PixelFormat
+
 
     def run(self):
         try:
@@ -124,6 +252,7 @@ class CameraThread(QThread):
                     if self.video_writer is not None:
                         self.video_writer.release()
                         self.log_signal.emit(f"Video saved to: {self.video_file}")
+                        self.validate_frame_count()
 
         except VimbaCameraError as e:
             self.log_signal.emit(f"VimbaCameraError: {str(e)}")
@@ -172,7 +301,7 @@ class CameraThread(QThread):
 
             if current_time - self.start_time >= self.duration:
                 self.log_signal.emit(f"{self.duration} seconds elapsed, stopping stream")
-                self.stop_flag.set()
+                self.stop()
 
         except Exception as e:
             import traceback
@@ -186,45 +315,165 @@ class CameraThread(QThread):
             except Exception as e:
                 self.log_signal.emit(f"Error queuing frame: {str(e)}")
 
+    def validate_frame_count(self):
+        # Check written video file for frame count
+        cap = cv2.VideoCapture(str(self.video_file))
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        # Raise a warning if the frame count is not as expected
+        if frame_count != self.expected_frame_count:
+            self.log_signal.emit(f"Warning: Frame count mismatch. Expected: {self.expected_frame_count}, Actual: {frame_count}")
+
     def stop(self):
         self.log_signal.emit("Stopping camera thread...")
         self.stop_flag.set()
         self.log_signal.emit("Camera thread stopped!")
 
-class DebugVideoWriter:
-    def __init__(self, filename: str, fourcc: int, fps: float, frameSize: Tuple[int, int], isColor: bool = True):
-        self.log_signal = print  # Replace this with your log_signal method
-        self.writer = cv2.VideoWriter(filename, fourcc, fps, frameSize, isColor)
-        self.frame_count = 0
-        self.filename = filename
-        self.fourcc = fourcc
-        self.fps = fps
-        self.frameSize = frameSize
-        self.isColor = isColor
+class BaslerCameraThread(BaseCameraThread):
+    def __init__(self, duration, frame_rate, start_event, camera_ready_event, video_file):
+        super().__init__(duration, frame_rate, start_event, camera_ready_event, video_file)
+        import pypylon.pylon as pylon
+        self.pylon = pylon
+        self.disk_writer = None
+        self.disk_writer_ready_event = Event()
+        self.start_event = start_event
+        self.frame_interval = 1.0 / self.frame_rate
+        self.frame_buffer = Queue(maxsize=10)
 
-    def write(self, frame: np.ndarray) -> bool:
-        self.frame_count += 1
-        self.log_signal(f"Attempting to write frame {self.frame_count}")
-        self.log_signal(f"Frame shape: {frame.shape}, dtype: {frame.dtype}")
-        self.log_signal(f"Frame min: {np.min(frame)}, max: {np.max(frame)}")
-        
+    def run(self):
         try:
-            result = self.writer.write(frame)
-            if result:
-                self.log_signal(f"Frame {self.frame_count} written successfully")
-            else:
-                self.log_signal(f"Failed to write frame {self.frame_count}")
-            return result
+            self.log_signal.emit("BaslerCameraThread: Starting run method")
+            self.log_signal.emit(f"Expected frame count: {self.expected_frame_count}")
+            converter = self.pylon.ImageFormatConverter()
+
+            # converting to opencv bgr format
+            converter.OutputPixelFormat = self.pylon.PixelType_Mono8
+            converter.OutputBitAlignment = self.pylon.OutputBitAlignment_MsbAligned
+
+            tlf = self.pylon.TlFactory.GetInstance()
+            cam = self.pylon.InstantCamera(tlf.CreateFirstDevice())
+            self.log_signal.emit(f"BaslerCameraThread: Opening Camera {cam.GetDeviceInfo().GetModelName()}")
+            cam.Open()
+            self.log_signal.emit("BaslerCameraThread: Camera opened successfully")
+
+            # Configure camera settings
+            cam.Width.Value = cam.Width.Max
+            cam.Height.Value = cam.Height.Max
+            cam.CenterX.Value = True
+            cam.CenterY.Value = True
+            cam.ExposureTime.Value = 30000
+            cam.AcquisitionFrameRateEnable.Value = True
+            cam.AcquisitionFrameRate.Value = 30
+
+            # Set up disk writer thread
+            self.log_signal.emit("BaslerCameraThread: Initializing disk writer thread")
+            self.disk_writer = DiskWriterThread(
+                self.video_file,
+                self.frame_rate,
+                (
+                    int(cam.Width.Value),
+                    int(cam.Height.Value)
+                ),
+                self.disk_writer_ready_event,
+                isColor=True,
+                start_event=self.start_event
+            )
+
+            self.log_signal.emit("BaslerCameraThread: DiskWriterThread initialized")
+            self.disk_writer.log_signal.connect(self.log_signal)
+            self.log_signal.emit("BaslerCameraThread: Starting disk writer thread")
+            self.disk_writer.start()
+            self.log_signal.emit("BaslerCameraThread: DiskWriterThread started")
+
+            self.disk_writer_ready_event.wait()
+            self.log_signal.emit("BaslerCameraThread: DiskWriterThread ready")
+            self.camera_ready_event.set()
+            self.log_signal.emit("BaslerCameraThread: Camera ready event set")
+            cam.StartGrabbing(self.pylon.GrabStrategy_LatestImageOnly)
+            self.log_signal.emit("BaslerCameraThread: Camera grabbing started")
+            self.start_event.wait()
+
+            start_time = perf_counter()
+            next_frame_time = start_time
+
+            while cam.IsGrabbing() and self.frame_count < self.expected_frame_count and not self.stop_flag.is_set():
+                frame_start_time = perf_counter()
+                current_time = perf_counter()
+
+                if current_time >= next_frame_time:
+                    grab_result = cam.RetrieveResult(5000, self.pylon.TimeoutHandling_ThrowException)
+                
+                    if grab_result.GrabSucceeded():
+                        frame_start_time = perf_counter()
+                        image = converter.Convert(grab_result)
+                        img = image.GetArray()
+
+                        self.frame_buffer.put((img, frame_start_time), block=False)
+                        self.process_frame_buffer()
+
+                        self.frame_count += 1
+                        next_frame_time += self.frame_interval
+                        img_bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                        h, w, ch = img_bgr.shape
+                        bytes_per_line = w * ch
+                        q_image = QImage(img_bgr.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                        self.frame_ready.emit(q_image)
+                        frame_end_time = perf_counter()
+                        processing_time = frame_end_time - frame_start_time
+                        self.log_signal.emit(f"Frame {self.frame_count} processed in {processing_time*1000:.2f}ms")
+                    grab_result.Release()
+                else:
+                    sleep_time = next_frame_time - current_time
+                    if sleep_time > 0:
+                        self.log_signal.emit(f"Sleeping for {sleep_time*1000:.2f}ms")
+                        sleep(sleep_time)
+                        self.log_signal.emit("Woke up from sleep")
+            
+            self.log_signal.emit(f"BaslerCameraThread: Capture complete. Total frames: {self.frame_count}")
+
         except Exception as e:
-            self.log_signal(f"Error writing frame {self.frame_count}: {str(e)}")
-            return False
+            self.log_signal.emit(f"An unexpected error occurred in BaslerCameraThread: {str(e)}")
+            import traceback
+            self.log_signal.emit(traceback.format_exc())
+        finally:
+            cam.StopGrabbing()
+            cam.Close()
+            self.log_signal.emit("BaslerCameraThread: Camera closed successfully")
 
-    def release(self):
-        self.writer.release()
-        self.log_signal("VideoWriter released")
+            if self.disk_writer:
+                self.log_signal.emit("BaslerCameraThread: Stopping disk writer thread")
+                self.disk_writer.stop()
+                self.log_signal.emit("BaslerCameraThread: DiskWriterThread stopped")
+            
+            self.validate_frame_count()
 
-    def isOpened(self):
-        return self.writer.isOpened()
+    def stop(self):
+        self.log_signal.emit("BaslerCameraThread: Stop requested")
+        self.stop_flag.set()
+        if self.disk_writer:
+            self.disk_writer.stop()
+        self.log_signal.emit("BaslerCameraThread: Stopped")
 
-    def __getattr__(self, name):
-        return getattr(self.writer, name)
+    def add_frame(self, frame):
+        if self.disk_writer:
+            self.disk_writer.add_frame(frame)
+        else:
+            self.log_signal.emit("BaslerCameraThread: DiskWriterThread not initialized, frame dropped")
+
+    def process_frame_buffer(self, ):
+        while not self.frame_buffer.empty():
+            img, timestamp = self.frame_buffer.get()
+            if self.disk_writer:
+                self.disk_writer.add_frame(img)
+            current_time = perf_counter()
+            time_since_capture = current_time - timestamp
+            self.log_signal.emit(f"Frame processed. Time since capture: {time_since_capture*1000:.2f}ms")
+
+    def validate_frame_count(self):
+        # Check written video file for frame count
+        cap = cv2.VideoCapture(str(self.video_file))
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        # Raise a warning if the frame count is not as expected
+        if frame_count != self.expected_frame_count:
+            self.log_signal.emit(f"Warning: Frame count mismatch. Expected: {self.expected_frame_count}, Actual: {frame_count}")

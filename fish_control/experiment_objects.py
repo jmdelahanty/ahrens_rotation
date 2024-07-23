@@ -13,7 +13,8 @@ from typing import List
 from pathlib import Path
 import sys
 import json
-from camera_objects import CameraThread
+from camera_objects import VimbaCameraThread, BaslerCameraThread, DiskWriterThread
+# from experiment_objects import OnePortEtohExperiment, EtOHBathExperiment
 
 STATIC_FIRMATA_PATH = Path("C:/Users/delahantyj/Documents/Arduino/libraries/Firmata/examples/StandardFirmata/StandardFirmata.ino")
 
@@ -109,6 +110,8 @@ class ExperimentThread(QThread):
         self.start_event = Event()
         self.camera_thread = None
         self.camera_ready_event = Event()
+        # self.disk_writer_thread = None
+        # self.disk_writer_ready_event = Event()
         self.h5_writer = None
         self.h5_ready_event = Event()
         self.recording_duration = self.experiment.recording_duration
@@ -117,6 +120,7 @@ class ExperimentThread(QThread):
         self.user_confirmed = Event()
         self.video_filename = None
         self.h5_filename = None
+        self.all_components_ready = Event()
 
     def setup_arduino(self):
         self.update_signal.emit("Setting up Arduino...")
@@ -139,21 +143,55 @@ class ExperimentThread(QThread):
 
     def setup_camera(self):
         self.update_signal.emit("Setting up camera...")
-        self.camera_thread = CameraThread(self.recording_duration, 30, self.start_event, self.camera_ready_event, self.video_filename)
+        camera_class = self.get_camera_class()
+        self.camera_thread = camera_class(
+            self.recording_duration,
+            30,  # Frame rate
+            self.start_event,
+            self.camera_ready_event,
+            self.video_filename
+        )
         self.camera_thread.frame_ready.connect(self.frame_ready)
         self.camera_thread.log_signal.connect(self.update_signal)
         self.camera_thread.start()
+        self.update_signal.emit("Camera thread started.")
+
+    def get_camera_class(self):
+        if hasattr(self.experiment, 'camera_class'):
+            return self.experiment.camera_class
+        else:
+            raise ValueError(f"Unknown experiment type: {type(self.experiment).__name__}")
 
     def setup_h5_writer(self):
         self.update_signal.emit("Setting up H5 writer...")
         self.h5_writer = H5WriterThread(self.h5_filename, self.start_event, self.h5_ready_event)
         self.h5_writer.start()
 
+    def setup_components(self):
+        if getattr(self.experiment, 'requires_camera', False):
+            self.setup_camera()
+        if getattr(self.experiment, 'requires_arduino', False):
+            self.setup_arduino()
+        if getattr(self.experiment, 'requires_h5_logging', False):
+            self.setup_h5_writer()
+
     def wait_for_components(self):
+        self.update_signal.emit("Waiting for all components to be ready...")
+        events_to_wait = []
+        
         if self.camera_thread:
-            self.camera_ready_event.wait()
+            events_to_wait.append(self.camera_ready_event)
         if self.h5_writer:
-            self.h5_ready_event.wait()
+            events_to_wait.append(self.h5_ready_event)
+        # if self.disk_writer_thread:
+        #     events_to_wait.append(self.disk_writer_ready_event)
+        
+        for event in events_to_wait:
+            event.wait()
+            self.update_signal.emit(f"Component ready: {event}")
+        
+        self.all_components_ready.set()
+        self.update_signal.emit("All components are ready.")
 
     def cleanup(self):
         self.stop_flag.set()
@@ -189,7 +227,7 @@ class ExperimentThread(QThread):
             # Wait for all components to be ready
             self.wait_for_components()
 
-            self.update_signal.emit("All components ready. Starting experiment...")
+            self.update_signal.emit("All components ready. Requesting user confirmation...")
 
             # Request user confirmation
             self.request_confirmation.emit("Start Experiment", "All components ready. Click OK to start!")
@@ -199,6 +237,7 @@ class ExperimentThread(QThread):
 
             self.update_signal.emit("All components ready. Starting experiment...")
             start_experiment_time = perf_counter()
+            self.update_signal.emit(f"Setting start event at {start_experiment_time:.2f}s")
             self.start_event.set()
             self.update_signal.emit(f"Experiment started at {start_experiment_time:.2f}s")
 
@@ -235,14 +274,6 @@ class ExperimentThread(QThread):
             self.update_signal.emit("Arduino connection closed.")
         self.finished_signal.emit()
 
-    def setup_components(self):
-        if getattr(self.experiment, 'requires_camera', False):
-            self.setup_camera()
-        if getattr(self.experiment, 'requires_arduino', False):
-            self.setup_arduino()
-        if getattr(self.experiment, 'requires_h5_logging', False):
-            self.setup_h5_writer()
-
     def stop(self):
         self.stop_flag.set()
 
@@ -262,7 +293,15 @@ class ExperimentRunner(QObject):
         self.experiment_thread = ExperimentThread(experiment, self.experiment_dir)
 
     def start_experiment(self):
-        self.experiment_thread.start()
+        try:
+            self.experiment_thread.start()
+            # self.experiment_thread.wait()
+            # self.log_signal.emit("Experiment completed successfully!")
+        except Exception as e:
+            self.update_signal.emit(f"An error occurred: {str(e)}")
+            import traceback
+            self.update_signal.emit(traceback.format_exc())
+
 
 class H5WriterThread(QThread):
     def __init__(self, filename, start_event=None, h5_ready_event=None):

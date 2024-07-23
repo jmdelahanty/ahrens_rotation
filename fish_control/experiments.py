@@ -1,6 +1,7 @@
 import warnings
 from time import sleep, monotonic
 from experiment_objects import ValveController
+from camera_objects import VimbaCameraThread, BaslerCameraThread
 
 class OnePortEtohExperiment:
     always_display = ['pre_period', 'post_period', 'ipi', 'isi', 'num_stim', 'num_pulses', 
@@ -8,6 +9,7 @@ class OnePortEtohExperiment:
     requires_camera = True
     requires_arduino = True
     requires_h5_logging = True
+    camera_class = VimbaCameraThread
 
     def __init__(self, valve_controller=None, pre_period=300, post_period=300, ipi=0.50, isi=60, num_stim=5, num_pulses=1):
         self.valve_controller = None
@@ -200,6 +202,7 @@ class EtOHBathExperiment:
     requires_camera = True
     requires_arduino = False
     requires_h5_logging = True
+    camera_class = BaslerCameraThread
 
     def __init__(self, pre_period=300, experiment_period=900):
         self._pre_period = pre_period
