@@ -1,4 +1,4 @@
-from PyQt5.QtCore import QObject, pyqtSignal, QThread
+from PyQt5.QtCore import QObject, pyqtSignal, QThread, QElapsedTimer
 from PyQt5.QtGui import QImage
 from threading import Event
 from time import perf_counter, sleep
@@ -126,7 +126,7 @@ class ThreadABCMeta(type(QThread), ABCMeta):
     pass
 
 class BaseCameraThread(QThread, ABC, metaclass=ThreadABCMeta):
-    frame_ready = pyqtSignal(QImage)
+    frame_ready = pyqtSignal(np.ndarray)
     log_signal = pyqtSignal(str)
 
     def __init__(self, duration, frame_rate, start_event, camera_ready_event, video_file):
@@ -292,10 +292,7 @@ class VimbaCameraThread(BaseCameraThread):
             if self.frame_count <= 5:
                 self.log_signal.emit(f"Processing frame {self.frame_count} - Shape: {image.shape}, Dtype: {image.dtype}, Min: {np.min(image)}, Max: {np.max(image)}")
 
-            h, w, ch = im.shape
-            bytes_per_line = w * ch
-            q_image = QImage(im.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            self.frame_ready.emit(q_image)
+            self.frame_ready.emit(im)
 
             self.frame_count += 1
 
@@ -393,41 +390,27 @@ class BaslerCameraThread(BaseCameraThread):
             self.log_signal.emit("BaslerCameraThread: Camera grabbing started")
             self.start_event.wait()
 
-            start_time = perf_counter()
-            next_frame_time = start_time
+            next_frame_time = 0
 
             while cam.IsGrabbing() and self.frame_count < self.expected_frame_count and not self.stop_flag.is_set():
-                frame_start_time = perf_counter()
-                current_time = perf_counter()
 
-                if current_time >= next_frame_time:
-                    grab_result = cam.RetrieveResult(5000, self.pylon.TimeoutHandling_ThrowException)
+                grab_result = cam.RetrieveResult(5000, self.pylon.TimeoutHandling_ThrowException)
                 
-                    if grab_result.GrabSucceeded():
-                        frame_start_time = perf_counter()
-                        image = converter.Convert(grab_result)
-                        img = image.GetArray()
+                if grab_result.GrabSucceeded():
+                    image = converter.Convert(grab_result)
+                    img = image.GetArray()
 
-                        self.frame_buffer.put((img, frame_start_time), block=False)
-                        self.process_frame_buffer()
+                    self.frame_buffer.put(img, block=False)
+                    self.process_frame_buffer()
 
-                        self.frame_count += 1
-                        next_frame_time += self.frame_interval
-                        img_bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-                        h, w, ch = img_bgr.shape
-                        bytes_per_line = w * ch
-                        q_image = QImage(img_bgr.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                        self.frame_ready.emit(q_image)
-                        frame_end_time = perf_counter()
-                        processing_time = frame_end_time - frame_start_time
-                        self.log_signal.emit(f"Frame {self.frame_count} processed in {processing_time*1000:.2f}ms")
-                    grab_result.Release()
+                    self.frame_count += 1
+                    next_frame_time += self.frame_interval
+                    img_bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                    self.frame_ready.emit(img_bgr)
                 else:
-                    sleep_time = next_frame_time - current_time
-                    if sleep_time > 0:
-                        self.log_signal.emit(f"Sleeping for {sleep_time*1000:.2f}ms")
-                        sleep(sleep_time)
-                        self.log_signal.emit("Woke up from sleep")
+                    print("Error: GRAB FAILED")
+                    sleep(0.001)
+                grab_result.Release()
             
             self.log_signal.emit(f"BaslerCameraThread: Capture complete. Total frames: {self.frame_count}")
 
@@ -435,6 +418,8 @@ class BaslerCameraThread(BaseCameraThread):
             self.log_signal.emit(f"An unexpected error occurred in BaslerCameraThread: {str(e)}")
             import traceback
             self.log_signal.emit(traceback.format_exc())
+            print("ERROR WITH CAMERA THREAD")
+            print(traceback.format_exc())
         finally:
             cam.StopGrabbing()
             cam.Close()
@@ -460,14 +445,11 @@ class BaslerCameraThread(BaseCameraThread):
         else:
             self.log_signal.emit("BaslerCameraThread: DiskWriterThread not initialized, frame dropped")
 
-    def process_frame_buffer(self, ):
+    def process_frame_buffer(self, img):
         while not self.frame_buffer.empty():
-            img, timestamp = self.frame_buffer.get()
+            img = self.frame_buffer.get()
             if self.disk_writer:
                 self.disk_writer.add_frame(img)
-            current_time = perf_counter()
-            time_since_capture = current_time - timestamp
-            self.log_signal.emit(f"Frame processed. Time since capture: {time_since_capture*1000:.2f}ms")
 
     def validate_frame_count(self):
         # Check written video file for frame count

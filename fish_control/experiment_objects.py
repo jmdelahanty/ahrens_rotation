@@ -98,7 +98,7 @@ class ValveController(QObject):
 class ExperimentThread(QThread):
     update_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
-    frame_ready = pyqtSignal(QImage)
+    frame_ready = pyqtSignal(np.ndarray)
     request_confirmation = pyqtSignal(str, str) # Request confirmation from the user before starting the experiment (title, message)
 
     def __init__(self, experiment, experiment_dir):

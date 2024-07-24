@@ -4,6 +4,7 @@ import inspect
 import json
 from datetime import datetime
 from pathlib import Path
+import numpy as np
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QDate
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
@@ -241,24 +242,27 @@ class ExperimentConfigWindow(QWidget):
         self.log_display.verticalScrollBar().setValue(self.log_display.verticalScrollBar().maximum())
         print(f"Log: {message}")  # Print to console for debugging
 
-    @pyqtSlot(QImage)
+    @pyqtSlot(np.ndarray)
     def update_video_feed(self, image):
-
         try:
-
-            pixmap = QPixmap.fromImage(image)
+            h, w, ch = image.shape
+            bytes_per_line = ch * w
+            q_image = QImage(image.data, w, h, bytes_per_line, QImage.Format_BGR888)
             
-            if image.isNull():
-                self.log_display.append("Received null QImage")
+            if q_image.isNull():
+                self.log_display.append("Failed to create QImage from numpy array")
                 return
             
-            pixmap = QPixmap.fromImage(image)
+            pixmap = QPixmap.fromImage(q_image)
             if pixmap.isNull():
                 self.log_display.append("Failed to create QPixmap from QImage")
                 return
-            self.video_label.setPixmap(pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            
+            scaled_pixmap = pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.video_label.setPixmap(scaled_pixmap)
         except Exception as e:
-            self.log_display.append(f"Error updating video feed, Line 224: {str(e)}")
+            self.log_display.append(f"Error updating video feed: {str(e)}")
+            print(f"Error updating video feed: {str(e)}")
 
     @pyqtSlot(str)
     def update_status(self, message):
