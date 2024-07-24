@@ -13,8 +13,6 @@ from typing import List
 from pathlib import Path
 import sys
 import json
-from camera_objects import VimbaCameraThread, BaslerCameraThread, DiskWriterThread
-# from experiment_objects import OnePortEtohExperiment, EtOHBathExperiment
 
 STATIC_FIRMATA_PATH = Path("C:/Users/delahantyj/Documents/Arduino/libraries/Firmata/examples/StandardFirmata/StandardFirmata.ino")
 
@@ -110,8 +108,6 @@ class ExperimentThread(QThread):
         self.start_event = Event()
         self.camera_thread = None
         self.camera_ready_event = Event()
-        # self.disk_writer_thread = None
-        # self.disk_writer_ready_event = Event()
         self.h5_writer = None
         self.h5_ready_event = Event()
         self.recording_duration = self.experiment.recording_duration
@@ -183,8 +179,6 @@ class ExperimentThread(QThread):
             events_to_wait.append(self.camera_ready_event)
         if self.h5_writer:
             events_to_wait.append(self.h5_ready_event)
-        # if self.disk_writer_thread:
-        #     events_to_wait.append(self.disk_writer_ready_event)
         
         for event in events_to_wait:
             event.wait()
@@ -217,7 +211,7 @@ class ExperimentThread(QThread):
             # Generate filenames
             timestamp = datetime.now().strftime("%Y%m%d")
             self.video_filename = self.experiment_dir / f"{timestamp}_experiment.mp4"
-            self.h5_filename = self.experiment_dir / f"{timestamp}_valve_timestamps.h5"
+            self.h5_filename = self.experiment_dir / f"{timestamp}_timestamps.h5"
 
             self.update_signal.emit("Setting up experiment components...")
 
@@ -295,8 +289,6 @@ class ExperimentRunner(QObject):
     def start_experiment(self):
         try:
             self.experiment_thread.start()
-            # self.experiment_thread.wait()
-            # self.log_signal.emit("Experiment completed successfully!")
         except Exception as e:
             self.update_signal.emit(f"An error occurred: {str(e)}")
             import traceback

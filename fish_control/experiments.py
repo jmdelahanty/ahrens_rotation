@@ -198,16 +198,18 @@ class OnePortEtohExperiment:
         thread.update_signal.emit("Experiment run completed")
 
 class EtOHBathExperiment:
-    always_display = ['pre_period', 'experiment_period']
+    always_display = ['pre_period', 'experiment_period', 'num_lanes']
     requires_camera = True
     requires_arduino = False
     requires_h5_logging = True
     camera_class = BaslerCameraThread
 
-    def __init__(self, pre_period=300, experiment_period=900):
+    def __init__(self, pre_period=300, experiment_period=900, num_lanes=4):
         self._pre_period = pre_period
         self._experiment_period = experiment_period
+        self._num_lanes = num_lanes
         self._recording_duration = 0
+        self._subjects = [''] * num_lanes
         self._update_recording_duration()
 
     @property
@@ -229,6 +231,25 @@ class EtOHBathExperiment:
         self._update_recording_duration()
 
     @property
+    def num_lanes(self):
+        return self._num_lanes
+
+    @num_lanes.setter
+    def num_lanes(self, value):
+        self._num_lanes = int(value)
+        self._subjects = [''] * self._num_lanes
+
+    @property
+    def subjects(self):
+        return self._subjects
+
+    @subjects.setter
+    def subjects(self, value):
+        if len(value) != self._num_lanes:
+            raise ValueError(f"Number of subjects must match number of lanes ({self._num_lanes})")
+        self._subjects = value
+
+    @property
     def recording_duration(self):
         return self._recording_duration
     
@@ -241,7 +262,6 @@ class EtOHBathExperiment:
             raise ValueError(f"Calculated duration ({calculated_duration:.2f}s) does not match recording_duration ({self._recording_duration:.2f}s)\n"
                              f"Pre-period: {self._pre_period}s\n"
                              f"Experiment period: {self._experiment_period}s")
-        
 
     def run(self, thread):
         thread.update_signal.emit("Running EtOHBathExperiment...")
@@ -259,3 +279,4 @@ class EtOHBathExperiment:
         thread.h5_writer.add_event_to_queue('bath_end', -1, -1, monotonic())
 
         thread.h5_writer.add_event_to_queue('experiment_end', -1, -1, monotonic())
+        thread.update_signal.emit("Experiment completed")

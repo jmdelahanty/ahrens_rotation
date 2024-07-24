@@ -401,7 +401,7 @@ class BaslerCameraThread(BaseCameraThread):
                     img = image.GetArray()
 
                     self.frame_buffer.put(img, block=False)
-                    self.process_frame_buffer()
+                    self.process_frame_buffer(img)
 
                     self.frame_count += 1
                     next_frame_time += self.frame_interval

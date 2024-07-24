@@ -64,6 +64,11 @@ class ExperimentConfigWindow(QWidget):
         self.experiment_runner = None
         self.cleanup_thread = None
         self.cleanup_in_progress = False
+        self.setWindowTitle("Experiment Configuration")
+        self.subject_combos = None
+        self.subject_combo = None
+        self.etoh_bath_directory = self.data_directory / "etoh_bath_experiments"
+        self.etoh_bath_directory.mkdir(parents=True, exist_ok=True)
         self.initUI()
 
     def initUI(self):
@@ -72,9 +77,19 @@ class ExperimentConfigWindow(QWidget):
         right_layout = QVBoxLayout()
 
         # Left side (experiment configuration)
-        self.subject_combo = QComboBox(self)
-        self.populate_subject_combo()
-        left_layout.addRow("Subject:", self.subject_combo)
+        self.subject_combos = []
+        if isinstance(self.experiment, experiments.EtOHBathExperiment):
+            for i in range(self.experiment.num_lanes):
+                combo = QComboBox(self)
+                self.populate_subject_combo(combo)
+                left_layout.addRow(f"Subject in Lane {i+1}:", combo)
+                self.subject_combos.append(combo)
+                combo.currentTextChanged.connect(self.update_experiment_name)
+        else:
+            self.subject_combo = QComboBox(self)
+            self.populate_subject_combo(self.subject_combo)
+            left_layout.addRow("Subject:", self.subject_combo)
+            self.subject_combo.currentTextChanged.connect(self.update_experiment_name)
 
         self.input_fields = {}
         
@@ -131,6 +146,31 @@ class ExperimentConfigWindow(QWidget):
         self.setLayout(main_layout)
         self.update_experiment_name()
 
+    def get_experiment_directory(self):
+        if isinstance(self.experiment, experiments.EtOHBathExperiment):
+            return self.etoh_bath_directory
+        else:
+            return self.data_directory
+    def populate_subject_combo(self, combo):
+        for d in Path(self.remote_dir).iterdir():
+            if d.is_dir():
+                combo.addItem(d.name)
+        combo.model().sort(0)
+
+    def update_subject_combos(self):
+        current_layout = self.layout().itemAt(0).layout()
+        for i in reversed(range(current_layout.rowCount())):
+            if current_layout.itemAt(i, QFormLayout.LabelRole) and current_layout.itemAt(i, QFormLayout.LabelRole).widget().text().startswith("Subject in Lane"):
+                current_layout.removeRow(i)
+        
+        self.subject_combos = []
+        for i in range(self.experiment.num_lanes):
+            combo = QComboBox(self)
+            self.populate_subject_combo(combo)
+            current_layout.insertRow(i, f"Subject in Lane {i+1}:", combo)
+            self.subject_combos.append(combo)
+            combo.currentTextChanged.connect(self.update_experiment_name)
+
     def toggle_cleanup(self):
         if self.cleanup_in_progress:
             self.stop_cleanup()
@@ -170,11 +210,11 @@ class ExperimentConfigWindow(QWidget):
         layout.addRow(f"{attr.replace('_', ' ').capitalize()}:", input_field)
         input_field.textChanged.connect(lambda _, a=attr: self.update_experiment(a))
 
-    def populate_subject_combo(self):
+    def populate_subject_combo(self, combo):
         for d in Path(self.remote_dir).iterdir():
             if d.is_dir():
-                self.subject_combo.addItem(d.name)
-        self.subject_combo.model().sort(0)
+                combo.addItem(d.name)
+        combo.model().sort(0)
 
     def update_experiment(self, attr):
         try:
@@ -186,6 +226,8 @@ class ExperimentConfigWindow(QWidget):
                     value = float(value)
                 print(f"Updating {attr} to {value}")
                 setattr(self.experiment, attr, value)
+                if attr == 'num_lanes' and isinstance(self.experiment, experiments.EtOHBathExperiment):
+                    self.update_subject_combos()
                 self.experiment._update_recording_duration()  # Call this after updating any parameter
             
             # Update the recording_duration field in the GUI
@@ -196,10 +238,13 @@ class ExperimentConfigWindow(QWidget):
             print(f"Invalid input for {attr}")
     
     def update_experiment_name(self):
-        subject = self.subject_combo.currentText()
+        if isinstance(self.experiment, experiments.EtOHBathExperiment):
+            subjects = "_".join([combo.currentText() for combo in self.subject_combos if combo.currentText()])
+        else:
+            subjects = self.subject_combo.currentText()
         experiment_type = type(self.experiment).__name__
         date = datetime.now().strftime("%Y%m%d")
-        self.experiment_name_input.setText(f"{date}_{subject}_{experiment_type}")
+        self.experiment_name_input.setText(f"{date}_{subjects}_{experiment_type}")
 
     def run_experiment(self):
         try:
@@ -207,9 +252,16 @@ class ExperimentConfigWindow(QWidget):
             print("About to verify duration:")
             print(f"Current recording duration: {self.experiment.recording_duration:.2f}s")
             self.experiment.verify_duration()
-            self.save_experiment_config()
-            experiment_dir = self.data_directory / self.subject_combo.currentText() / self.experiment_name_input.text()
+            if isinstance(self.experiment, experiments.EtOHBathExperiment):
+                self.experiment.subjects = [combo.currentText() for combo in self.subject_combos]
+            
+            base_dir = self.get_experiment_directory()
+            experiment_dir = base_dir / self.experiment_name_input.text()
             experiment_dir.mkdir(parents=True, exist_ok=True)
+
+
+            self.save_experiment_config(experiment_dir)
+
             self.experiment_runner = ExperimentRunner(self.experiment, experiment_dir)
             self.experiment_runner.experiment_thread.update_signal.connect(self.update_log)
             self.experiment_runner.experiment_thread.finished_signal.connect(self.experiment_finished)
@@ -273,27 +325,28 @@ class ExperimentConfigWindow(QWidget):
         QMessageBox.information(self, "Experiment Completed", "The experiment has finished.")
         self.status_label.setText("Ready")
 
-    def save_experiment_config(self):
-        subject_id = self.subject_combo.currentText()
+    def save_experiment_config(self, experiment_dir):
+        if isinstance(self.experiment, experiments.EtOHBathExperiment):
+            subjects = [combo.currentText() for combo in self.subject_combos]
+        else:
+            subjects = [self.subject_combo.currentText()]
         experiment_name = self.experiment_name_input.text()
         experiment_date = self.experiment_date_input.date().toString(Qt.ISODate)
         
         config = {
-            "subject_id": subject_id,
+            "subjects": subjects,
             "experiment_name": experiment_name,
             "experiment_date": experiment_date,
         }
 
-        # Add all experiment parameters to the config
         for attr, field in self.input_fields.items():
             config[attr] = field.text()
 
-        # Ensure the subject directory exists
-        subject_dir = Path(self.data_directory) / subject_id
-        subject_dir.mkdir(parents=True, exist_ok=True)
+        base_dir = self.get_experiment_directory()
+        experiment_dir = base_dir / experiment_name
+        experiment_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save the config file
-        config_path = subject_dir / f"{experiment_name}_config.json"
+        config_path = experiment_dir / f"{experiment_name}_config.json"
         with open(config_path, "w") as f:
             json.dump(config, f, indent=4)
 
