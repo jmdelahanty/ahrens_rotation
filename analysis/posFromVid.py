@@ -1,5 +1,5 @@
 import cv2 as cv
-from utils import *
+from analysis.utils import *
 import matplotlib.pyplot as plt
 
 filePath='~/Desktop/'
