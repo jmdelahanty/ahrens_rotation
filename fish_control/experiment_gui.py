@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 import numpy as np
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QDate
-from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtGui import QImage, QPixmap, QPalette, QColor
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QLineEdit, QVBoxLayout, QHBoxLayout,
     QFormLayout, QPushButton, QDateEdit, QTextEdit, QMessageBox,
@@ -19,11 +19,13 @@ import experiments
 class ExperimentSelectorWindow(QDialog):
     experiment_selected = pyqtSignal(object)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, background_color=None):
         super().__init__(parent)
         self.setWindowTitle("Select Experiment Type")
         self.setGeometry(200, 200, 300, 200)
         self.initUI()
+        if background_color:
+            self.set_background_color(background_color)
 
     def initUI(self):
         layout = QVBoxLayout()
@@ -54,9 +56,13 @@ class ExperimentSelectorWindow(QDialog):
             selected_class = getattr(experiments, class_name)
             self.experiment_selected.emit(selected_class)
             self.accept()
+    def set_background_color(self, color):
+        palette = self.palette()
+        palette.setColor(QPalette.Window, color)
+        self.setPalette(palette)
 
 class ExperimentConfigWindow(QWidget):
-    def __init__(self, remote_dir=None, raw_data_directory=None, experiment_class=None):
+    def __init__(self, remote_dir=None, raw_data_directory=None, experiment_class=None, background_color=None):
         super().__init__()
         self.data_directory = Path(raw_data_directory)
         self.remote_dir = Path(remote_dir)
@@ -70,6 +76,8 @@ class ExperimentConfigWindow(QWidget):
         self.etoh_bath_directory = self.data_directory / "etoh_bath_experiments"
         self.etoh_bath_directory.mkdir(parents=True, exist_ok=True)
         self.initUI()
+        if background_color:
+            self.set_background_color(background_color)
 
     def initUI(self):
         main_layout = QHBoxLayout()
@@ -145,6 +153,11 @@ class ExperimentConfigWindow(QWidget):
         main_layout.addLayout(right_layout)
         self.setLayout(main_layout)
         self.update_experiment_name()
+
+    def set_background_color(self, color):
+        palette = self.palette()
+        palette.setColor(QPalette.Window, color)
+        self.setPalette(palette)
 
     def get_experiment_directory(self):
         if isinstance(self.experiment, experiments.EtOHBathExperiment):

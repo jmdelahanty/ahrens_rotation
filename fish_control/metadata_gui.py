@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import (
     QWidget, QLineEdit, QFormLayout, QPushButton, QDateEdit, QMessageBox,
     QComboBox
 )
+from PyQt5.QtGui import QColor, QPalette
 from datetime import datetime
 import json
 from pathlib import Path
@@ -16,10 +17,17 @@ from metadata import Metadata, IncubatorProperties, Breeding, Dish
 from pathlib import Path
 
 class MetadataWindow(QWidget):
-    def __init__(self, remote_dir=None):
+    def __init__(self, remote_dir=None, background_color=None):
         super().__init__()
         self.remote_dir = Path(remote_dir)
         self.initUI()
+        if background_color:
+            self.set_background_color(background_color)
+
+    def set_background_color(self, color):
+        palette = self.palette()
+        palette.setColor(QPalette.Window, color)
+        self.setPalette(palette)
 
     def initUI(self):
         self.setWindowTitle("Metadata Input")
