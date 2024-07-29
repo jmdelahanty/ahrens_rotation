@@ -1,3 +1,5 @@
+# Initial analysis for opencv code from Dhruv Zocchi, PhD, Ahrens Lab, Janelia Research Campus
+
 import cv2 as cv
 from analysis.utils import *
 import matplotlib.pyplot as plt
