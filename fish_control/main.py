@@ -7,6 +7,7 @@ from pathlib import Path
 import json
 # inspect for dynamic dropdown population
 import inspect
+import random
 
 # PyQt5 imports for the GUI
 from PyQt5.QtWidgets import (
@@ -14,6 +15,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QMainWindow, QDialog, QListWidget,
 )
 from PyQt5.QtCore import pyqtSignal, QObject
+from PyQt5.QtGui import QColor, QPalette
 
 # Import metadata gui and experiment guis
 from metadata_gui import MetadataWindow
@@ -60,7 +62,9 @@ class MainWindow(QMainWindow):
             self.raw_data_directory = config.get("raw_data_directory")
             print(f"Raw Data Directory: {self.raw_data_directory}")
             print(f"Remote Data Directory: {self.remote_data_directory}")
+        self.background_color = self.generate_random_color()
         self.initUI()
+        self.set_background_color(self.background_color)
 
     def initUI(self):
         self.setWindowTitle("Fish Experiment Manager")
@@ -81,17 +85,29 @@ class MainWindow(QMainWindow):
         
         central_widget.setLayout(layout)
 
+    def generate_random_color(self):
+        return QColor(
+            random.randint(150, 255),
+            random.randint(150, 255),
+            random.randint(150, 255)
+        )
+
+    def set_background_color(self, color):
+        palette = self.palette()
+        palette.setColor(QPalette.Window, color)
+        self.setPalette(palette)
+
     def open_metadata_window(self):
-        self.metadata_window = MetadataWindow(self.remote_data_directory)
+        self.metadata_window = MetadataWindow(self.remote_data_directory, self.background_color)
         self.metadata_window.show()
 
     def open_experiment_selector(self):
-        selector = ExperimentSelectorWindow(self)
+        selector = ExperimentSelectorWindow(self, self.background_color)
         selector.experiment_selected.connect(self.open_experiment_config)
         selector.exec_()
 
     def open_experiment_config(self, experiment_class):
-        self.experiment_window = ExperimentConfigWindow(self.remote_data_directory, self.raw_data_directory, experiment_class)
+        self.experiment_window = ExperimentConfigWindow(self.remote_data_directory, self.raw_data_directory, experiment_class, self.background_color)
         self.experiment_window.show()
 
     def load_config(self):
