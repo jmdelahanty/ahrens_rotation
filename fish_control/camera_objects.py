@@ -9,6 +9,7 @@ import numpy as np
 from vimba import Vimba, Camera, Frame, VimbaCameraError, PixelFormat
 from abc import ABC, abstractmethod, ABCMeta
 from queue import Queue, Empty
+import skvideo.io
 
 class DiskWriterThread(QThread):
     log_signal = pyqtSignal(str)
@@ -30,18 +31,23 @@ class DiskWriterThread(QThread):
     def run(self):
         try:
             self.log_signal.emit("DiskWriterThread: Starting run method")
-            fourcc = cv2.VideoWriter_fourcc(*'avc1')
-            self.log_signal.emit(f"DiskWriterThread: Initializing VideoWriter with file {self.video_file}, "
-                                 f"frame rate {self.frame_rate}, frame size {self.frame_size}, isColor={self.isColor}")
-            self.video_writer = cv2.VideoWriter(str(self.video_file), fourcc, self.frame_rate, 
-                                                self.frame_size, isColor=self.isColor)
             
-            if not self.video_writer.isOpened():
-                raise IOError("Failed to open video writer")
-            else:
-                pass
-
-            self.log_signal.emit("DiskWriterThread: VideoWriter initialized successfully")
+            # Set up skvideo.io writer
+            outputdict = {
+                '-vcodec': 'libx264',
+                '-crf': '23', 
+                '-preset': 'ultrafast',
+                '-pix_fmt': 'yuv420p',
+                '-r': str(self.frame_rate)
+            }
+            
+            self.video_writer = skvideo.io.FFmpegWriter(
+                self.video_file,
+                inputdict={'-r': str(self.frame_rate)},
+                outputdict=outputdict
+            )
+            
+            self.log_signal.emit("DiskWriterThread: skvideo.io writer initialized successfully")
             self.disk_writer_ready_event.set()
             self.log_signal.emit("DiskWriterThread: Ready event set, waiting for start event")
             
@@ -50,7 +56,6 @@ class DiskWriterThread(QThread):
                 self.start_event.wait()
                 self.log_signal.emit("DiskWriterThread: Start event received. Beginning video writing")
             else:
-
                 self.log_signal.emit("DiskWriterThread: No start event provided, beginning video writing immediately")
 
             self.log_signal.emit("DiskWriterThread: Entering main processing loop")
@@ -58,12 +63,15 @@ class DiskWriterThread(QThread):
                 try:
                     frame = self.queue.get(timeout=1)
                     if frame is not None:
-                        # If the frame shape is only 2d, reshape into color image with opencv
+                        # If the frame is grayscale, convert to RGB
                         if len(frame.shape) == 2:
-                            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+                        elif frame.shape[2] == 3 and not self.isColor:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        
                         self.frames_received += 1
                         try:
-                            self.video_writer.write(frame)
+                            self.video_writer.writeFrame(frame)
                             self.frames_written += 1
                         except Exception as e:
                             print(f"Error writing frame: {str(e)}")
@@ -100,20 +108,21 @@ class DiskWriterThread(QThread):
             try:
                 frame = self.queue.get(timeout=1)
                 if frame is not None and self.video_writer is not None:
-                    write_result = self.video_writer.write(frame)
-                    if write_result:
-                        self.frames_written += 1
-                    else:
-                        self.log_signal.emit(f"DiskWriterThread: Failed to write frame during finalization")
+                    if len(frame.shape) == 2:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+                    elif frame.shape[2] == 3 and not self.isColor:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    self.video_writer.writeFrame(frame)
+                    self.frames_written += 1
                 self.queue.task_done()
             except Empty:
                 break
         if self.video_writer is not None:
-            self.video_writer.release()
-            self.log_signal.emit(f"DiskWriterThread: VideoWriter released. Total frames written: {self.frames_written}")
+            self.video_writer.close()
+            self.log_signal.emit(f"DiskWriterThread: Video writer closed. Total frames written: {self.frames_written}")
             self.log_signal.emit(f"DiskWriterThread: Total frames received: {self.frames_received}")
         else:
-            self.log_signal.emit("DiskWriterThread: VideoWriter was not initialized")
+            self.log_signal.emit("DiskWriterThread: Video writer was not initialized")
         
         # Check if the video file was created and has content
         if os.path.exists(self.video_file):
@@ -121,6 +130,7 @@ class DiskWriterThread(QThread):
             self.log_signal.emit(f"DiskWriterThread: Video file size: {file_size} bytes")
         else:
             self.log_signal.emit("DiskWriterThread: Video file was not created")
+
 
 class ThreadABCMeta(type(QThread), ABCMeta):
     pass

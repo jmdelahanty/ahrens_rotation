@@ -142,7 +142,7 @@ class ExperimentThread(QThread):
         camera_class = self.get_camera_class()
         self.camera_thread = camera_class(
             self.recording_duration,
-            30,  # Frame rate
+            90,  # Frame rate
             self.start_event,
             self.camera_ready_event,
             self.video_filename
