@@ -53,7 +53,33 @@ import json
 # These are for debugging weird thread issues, not really in use now...
 import traceback
 
-
+def visualize_frame(original_frame, processed_frame, cX, cY, points):
+    # Create a copy of the original frame for drawing
+    vis_frame = original_frame.copy()
+    
+    # Draw dots for selected points
+    for point_name, (x, y) in points.items():
+        if x is not None and y is not None:
+            cv2.circle(vis_frame, (int(x), int(y)), 5, (0, 255, 0), -1)
+            cv2.putText(vis_frame, point_name, (int(x)+10, int(y)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    
+    # Draw the detected fish position
+    if not np.isnan(cX) and not np.isnan(cY):
+        cv2.circle(vis_frame, (int(cX), int(cY)), 5, (0, 0, 255), -1)
+    
+    # Resize frames for display
+    height, width = original_frame.shape[:2]
+    new_height = 480
+    new_width = int(width * (new_height / height))
+    vis_frame_resized = cv2.resize(vis_frame, (new_width, new_height))
+    processed_frame_resized = cv2.resize(processed_frame, (new_width, new_height))
+    
+    # Concatenate frames horizontally
+    combined_frame = np.hstack((vis_frame_resized, processed_frame_resized))
+    
+    # Display the combined frame
+    cv2.imshow('Fish Tracking Visualization', combined_frame)
+    cv2.waitKey(1)  # Display frame for 1ms
 
 def preprocess_video(video, syringe_contents):
     # pass video object
@@ -211,10 +237,14 @@ def get_total_frames(video_path):
     cap.release()
     return total_frames
 
-def data_producer(video, data_queue, stop_event, background, points, previous_location, total_frames, progress_queue):
+def data_producer(video, data_queue, stop_event, initial_background, points, previous_location, total_frames, progress_queue):
     frame_count = 0
     max_retries = 10
     retry_count = 0
+    background = initial_background
+    background_update_interval = 250
+    max_allowed_distance = 50  # Maximum allowed distance between consecutive points (in pixels)
+
     try:
         while not stop_event.is_set() and video.isOpened() and frame_count < total_frames:
             ret, frame = video.read()
@@ -229,7 +259,11 @@ def data_producer(video, data_queue, stop_event, background, points, previous_lo
 
             frame_count += 1   
             frame = cv2.cvtColor(np.array(frame), cv2.COLOR_BGR2GRAY)
-    
+
+            # Update background every 250 frames
+            if frame_count % background_update_interval == 0:
+                background = frame
+
             if not isinstance(background, np.ndarray):
                 raise ValueError("Background frame (background) is not a numpy array.")
             if frame.shape != background.shape:
@@ -242,17 +276,25 @@ def data_producer(video, data_queue, stop_event, background, points, previous_lo
             median = cv2.medianBlur(thresholded, 7)
             contours, _ = cv2.findContours(median, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
             filtered_contours_and_areas = [(contour, cv2.contourArea(contour)) for contour in contours if cv2.contourArea(contour) > 20]
+            
             if filtered_contours_and_areas:
                 filtered_contours = [contour for contour, area in [max(filtered_contours_and_areas, key=lambda x: x[1])]]
                 contour = filtered_contours[0]
                 moments = cv2.moments(contour)
                 cX = round(int(moments["m10"] / moments["m00"]), 2)
                 cY = round(int(moments["m01"] / moments["m00"]), 2)
+                
+                # Check distance from previous point
+                if previous_location[0] is not None and previous_location[1] is not None:
+                    distance = np.linalg.norm(np.array([cX, cY]) - np.array(previous_location))
+                    if distance > max_allowed_distance:
+                        print(f"Warning: Large jump detected at frame {frame_count}. Using previous location.")
+                        cX, cY = previous_location
+                
                 previous_location[0], previous_location[1] = cX, cY
             else:
                 if previous_location[0] is not None and previous_location[1] is not None:
-                    cX = previous_location[0]
-                    cY = previous_location[1]
+                    cX, cY = previous_location
                 else:
                     cX = np.nan
                     cY = np.nan
@@ -367,25 +409,37 @@ def process_single_video(video_config, data_directory, position):
     process_video(video_config, progress_queue, position)
 
 
+# def main():
+#     Tk().withdraw()
+#     data_directory = Path("~/OneDrive").expanduser().resolve()
+#     video_configs = get_videos_and_configs(data_directory)
+
+#     num_cores = multiprocessing.cpu_count() - 1
+#     num_jobs = min(8, num_cores)
+
+#     # Create a manager for progress bars
+#     manager = multiprocessing.Manager()
+#     progress_bars = manager.list([None] * len(video_configs))
+
+#     def init_tqdm():
+#         tqdm.set_lock(multiprocessing.RLock())
+        
+#     Parallel(n_jobs=num_jobs, verbose=0)(
+#         delayed(process_single_video)(video_config, data_directory, i) 
+#         for i, video_config in enumerate(video_configs)
+#     )
+
 def main():
     Tk().withdraw()
     data_directory = Path("~/OneDrive").expanduser().resolve()
     video_configs = get_videos_and_configs(data_directory)
 
-    num_cores = multiprocessing.cpu_count() - 1
-    num_jobs = min(8, num_cores)
+    # Select a specific video config
+    # For example, let's select the first video config in the list
+    selected_video_config = video_configs[-2]
 
-    # Create a manager for progress bars
-    manager = multiprocessing.Manager()
-    progress_bars = manager.list([None] * len(video_configs))
-
-    def init_tqdm():
-        tqdm.set_lock(multiprocessing.RLock())
-        
-    Parallel(n_jobs=num_jobs, verbose=0)(
-        delayed(process_single_video)(video_config, data_directory, i) 
-        for i, video_config in enumerate(video_configs)
-    )
+    # Process the selected video
+    process_single_video(selected_video_config, data_directory, 0)
 
 if __name__ == "__main__":
     main()

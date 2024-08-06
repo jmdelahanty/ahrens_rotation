@@ -5,7 +5,7 @@ from tabulate import tabulate
 from pathlib import Path
 
 def read_valve_timestamps(h5_filename=None, video_filename=None):
-    if not os.path.exists(h5_filename):
+    if not os.path.exists(str(h5_filename)):
         print(f"Error: H5 file '{h5_filename}' not found.")
         return
 
@@ -14,7 +14,7 @@ def read_valve_timestamps(h5_filename=None, video_filename=None):
         return
 
     # Read frame rate from video file
-    video = cv2.VideoCapture(video_filename)
+    video = cv2.VideoCapture(str(video_filename))
     frame_rate = video.get(cv2.CAP_PROP_FPS)
     video.release()
 
@@ -84,6 +84,6 @@ def read_valve_timestamps(h5_filename=None, video_filename=None):
 
 if __name__ == "__main__":
     read_valve_timestamps(
-        h5_filename = Path("D:/lgfl/sub-0000/20240721_rawdata_OnePortEtohExperiment/20240721_valve_timestamps.h5"),
-        video_filename = Path("D:/lgfl/sub-0000/20240721_rawdata_OnePortEtohExperiment/20240721_experiment.mp4")
+        h5_filename = Path("/home/jmdelahanty/OneDrive/lgfl/rawdata/sub-0001/20240718_sub-0001_OnePortEtohExperiment/20240718_sub-0001_OnePortEtohExperiment.h5"),
+        video_filename = Path("/home/jmdelahanty/OneDrive/lgfl/rawdata/sub-0001/20240718_sub-0001_OnePortEtohExperiment/20240718_sub-0001_OnePortEtohExperiment.mp4")
     )
