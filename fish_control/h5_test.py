@@ -9,16 +9,16 @@ def read_valve_timestamps(h5_filename=None, video_filename=None):
         print(f"Error: H5 file '{h5_filename}' not found.")
         return
 
-    if not os.path.exists(video_filename):
-        print(f"Error: Video file '{video_filename}' not found.")
-        return
+    # if not os.path.exists(video_filename):
+    #     print(f"Error: Video file '{video_filename}' not found.")
+    #     return
 
-    # Read frame rate from video file
-    video = cv2.VideoCapture(str(video_filename))
-    frame_rate = video.get(cv2.CAP_PROP_FPS)
-    video.release()
+    # # Read frame rate from video file
+    # video = cv2.VideoCapture(str(video_filename))
+    # frame_rate = video.get(cv2.CAP_PROP_FPS)
+    # video.release()
 
-    print(f"Video frame rate: {frame_rate:.2f} fps")
+    # print(f"Video frame rate: {frame_rate:.2f} fps")
 
     with h5py.File(h5_filename, 'r') as f:
         print(f"H5 file opened: {h5_filename}")
@@ -35,10 +35,10 @@ def read_valve_timestamps(h5_filename=None, video_filename=None):
         dataset = f['valve_events']
         
         intended_fps = f.attrs.get('intended_fps')
-        if intended_fps:
-            print(f"Intended FPS: {intended_fps}")
-        if intended_fps and intended_fps != frame_rate:
-            print(f"Warning: Intended frame rate ({intended_fps} fps) differs from video frame rate ({frame_rate:.2f} fps)")
+        # if intended_fps:
+        #     print(f"Intended FPS: {intended_fps}")
+        # if intended_fps and intended_fps != frame_rate:
+        #     print(f"Warning: Intended frame rate ({intended_fps} fps) differs from video frame rate ({frame_rate:.2f} fps)")
         
         experiment_start_time = f.attrs.get('experiment_start_time')
         if experiment_start_time:
@@ -60,7 +60,7 @@ def read_valve_timestamps(h5_filename=None, video_filename=None):
             pulse_number = event['pulse_number']
             timestamp = event['timestamp']
             relative_time = timestamp - first_timestamp
-            estimated_frame = int(relative_time * frame_rate)
+            # estimated_frame = int(relative_time * frame_rate)
             
             stim_str = f"{stim_number}" if stim_number != -1 else "N/A"
             pulse_str = f"{pulse_number}" if pulse_number != -1 else "N/A"
@@ -70,9 +70,10 @@ def read_valve_timestamps(h5_filename=None, video_filename=None):
                 stim_str,
                 pulse_str,
                 f"{timestamp:.6f}",
-                f"+{relative_time:.6f}s",
-                estimated_frame
+                f"+{relative_time:.6f}s"
             ])
+            #     estimated_frame
+            # ])
 
         headers = ["Event", "Stim", "Pulse", "Time (s)", "Relative Time", "Est. Frame"]
         print(tabulate(table_data, headers=headers, tablefmt="grid"))
@@ -80,7 +81,7 @@ def read_valve_timestamps(h5_filename=None, video_filename=None):
         print("\nSummary:")
         print(f"Total events: {len(dataset)}")
         print(f"Duration: {dataset[-1]['timestamp'] - first_timestamp:.2f} seconds")
-        print(f"Estimated total frames: {int((dataset[-1]['timestamp'] - first_timestamp) * frame_rate)}")
+        # print(f"Estimated total frames: {int((dataset[-1]['timestamp'] - first_timestamp) * frame_rate)}")
 
 if __name__ == "__main__":
     read_valve_timestamps(
